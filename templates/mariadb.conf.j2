@@ -1,0 +1,32 @@
+
+# =============================================================================
+# MariaDB Database Configuration
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!       ⚠️
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+# =============================================================================
+#
+# Generated from: roles/databases/templates/mariadb.conf.j2
+# Deployed to: /etc/mysql/mariadb.conf.d/{{ mariadb_user }}.conf
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# This is a minimal configuration to get MariaDB up and running.
+# All settings have sensible defaults in mariadb/defaults/main.yaml and can be
+# customized/overwritten via host variables.
+# =============================================================================
+
+
+[mysqld]
+user = {{ mariadb_user }}
+datadir = {{ mariadb_data_dir }}
+socket = {{ mariadb_run_dir }}/mysqld.sock
+pid-file = {{ mariadb_run_dir }}/mysqld.pid
+bind-address = 127.0.0.1
+port = {{ databases_mariadb.port }}
+log-error = {{ mariadb_data_dir }}/mariadb.log
+
+
+[client]
+user = root
+socket = {{ mariadb_run_dir }}/mysqld.sock

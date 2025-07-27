@@ -1,0 +1,94 @@
+# ==============================================================================
+# Valkey Exporter Environment Configuration
+# ==============================================================================
+#
+# ⚠️ WARNING: This file is managed by Ansible! ⚠️
+# 🔄 Any manual changes will be overwritten on the next Ansible run
+# 📝 To make changes, edit the template file and run the playbook
+#
+# This environment configuration file contains all the settings and variables
+# required for the Valkey Exporter service to connect to Valkey/Redis instances
+# and export metrics in Prometheus format.
+#
+# Service Overview:
+#   - 📊 Exports Valkey/Redis metrics to Prometheus
+#   - 🔗 Connects to Valkey instance via TCP/Unix socket
+#   - 🌐 Serves metrics on HTTP endpoint
+#   - 🔐 Supports authentication and SSL connections
+#
+# Configuration Sections:
+#   1. 🌐 Exporter Settings - Service binding and metrics
+#   2. 🔗 Valkey Connection Settings - Database connection parameters
+#   3. 🔐 Authentication Settings - Password and SSL configuration
+#   4. 📝 Logging Settings - Log level configuration
+#   5. 🏠 Runtime Settings - Directories and user context
+#
+# Key Variables:
+#   - REDIS_ADDR: Valkey/Redis connection address
+#   - REDIS_PASSWORD: Authentication password (if required)
+#   - REDIS_EXPORTER_WEB_LISTEN_ADDRESS: Bind address for metrics endpoint
+#   - REDIS_EXPORTER_LOG_LEVEL: Log level (debug, info, warn, error)
+#
+# Security Considerations:
+#   🔒 Contains Valkey password - keep file permissions secure
+#   🛡️ SSL/TLS connections supported for secure communication
+#   📁 File permissions: 640 (owner read/write, group read)
+#
+# Template Variables:
+#   - databases_valkey.exporter.*: Configuration from Ansible variables
+#   - valkey_exporter_*: Runtime directory paths
+#   - bitcoin.group: Service group membership
+#
+# File Location:
+#   - Deployed to: /etc/valkey-exporter/valkey-exporter.conf
+#   - Read by: systemd service via EnvironmentFile directive
+#   - Permissions: 640 (valkey-exporter:bitcoin)
+#
+# Usage:
+#   This file is automatically loaded by the systemd service unit.
+#   Environment variables are available to the redis_exporter process.
+#
+# References:
+#   - Valkey Exporter: https://github.com/oliver006/redis_exporter
+#   - Valkey: https://databases_valkey.io/
+#   - Redis Protocol: https://redis.io/docs/reference/protocol-spec/
+#   - Systemd Environment: https://www.freedesktop.org/software/systemd/man/systemd.exec.html
+#
+# Managed by: Ansible
+# Template: roles/debian/templates/valkey-exporter.conf.j2
+# Last Updated: 2025-07-14
+# ==============================================================================
+
+# Valkey Exporter Connection Settings
+# Connection details for the Valkey/Redis instance to monitor
+REDIS_ADDR="127.0.0.1:{{ databases_valkey.port }}"
+REDIS_USER="{{ databases_valkey.user }}"
+REDIS_PASSWORD="{{ databases_valkey.password }}"
+
+# Valkey Exporter Web Server Settings
+# HTTP server configuration for serving Prometheus metrics
+REDIS_EXPORTER_WEB_LISTEN_ADDRESS="127.0.0.1:{{ databases_valkey.exporter.port }}"
+REDIS_EXPORTER_WEB_TELEMETRY_PATH="/metrics"
+
+# Valkey Exporter Logging Configuration
+# Log level and output configuration
+REDIS_EXPORTER_LOG_LEVEL="info"
+REDIS_EXPORTER_LOG_FORMAT="json"
+
+# Valkey Exporter Feature Configuration
+# Feature flags and advanced settings
+# REDIS_EXPORTER_CHECK_KEYS="{{ databases_valkey.exporter.check_keys | default('') }}"
+# REDIS_EXPORTER_CHECK_KEY_GROUPS="{{ databases_valkey.exporter.check_key_groups | default('') }}"
+# REDIS_EXPORTER_MAX_DISTINCT_KEY_GROUPS="{{ databases_valkey.exporter.max_distinct_key_groups | default('100') }}"
+
+# Valkey Exporter Connection Timeouts
+# Connection and operation timeout settings
+# REDIS_EXPORTER_CONNECTION_TIMEOUT="{{ databases_valkey.exporter.connection_timeout | default('15s') }}"
+# REDIS_EXPORTER_PING_ON_CONNECT="{{ databases_valkey.exporter.ping_on_connect | default('true') }}"
+
+# Valkey Exporter Security Settings
+# SSL/TLS and authentication configuration
+# REDIS_EXPORTER_SKIP_TLS_VERIFICATION="{{ databases_valkey.exporter.skip_tls_verification | default('false') }}"
+# REDIS_EXPORTER_TLS_CLIENT_KEY_FILE="{{ databases_valkey.exporter.tls_client_key_file | default('') }}"
+# REDIS_EXPORTER_TLS_CLIENT_CERT_FILE="{{ databases_valkey.exporter.tls_client_cert_file | default('') }}"
+# REDIS_EXPORTER_TLS_CA_CERT_FILE="{{ databases_valkey.exporter.tls_ca_cert_file | default('') }}"

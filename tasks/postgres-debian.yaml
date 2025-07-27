@@ -1,0 +1,644 @@
+---
+# Install PostgreSQL on Debian following 00-service-template structure
+
+## 00. SET POSTGRES ANSIBLE FACTS
+# This makes it easier to read the ansible tasks
+# -----------------------------------------------------------------------------
+
+- name: Set PostgreSQL facts for the role
+  ansible.builtin.set_fact:
+    postgres_user: "{{ databases_postgres.user }}"
+    postgres_home_dir: "/opt/{{ databases_postgres.user }}"
+    postgres_config_dir: "/etc/{{ databases_postgres.user }}"
+    postgres_config_file: "/etc/{{ databases_postgres.user }}/{{ databases_postgres.user }}.conf"
+    postgres_data_dir: "/data/{{ databases_postgres.user }}"
+    postgres_systemd_name: "{{ databases_postgres.user }}"
+    postgres_download_url: "https://ftp.postgresql.org/pub/source/v{{ databases_postgres.release }}/postgresql-{{ databases_postgres.release }}.tar.gz"
+    postgres_installed_version: ""
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+    - uninstall
+
+- name: Confirm postgres uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: PostgreSQL Uninstallation Confirmation ⚠️
+      
+      You are about to uninstall PostgreSQL from this system.
+      
+      This will remove:
+      🗑️  PostgreSQL server and client binaries
+      🗑️  Systemd service: {{ postgres_systemd_name }}.service
+      🗑️  Configuration files: {{ postgres_config_dir }}/
+      🗑️  Data directory: {{ postgres_data_dir }}
+      🗑️  User account: {{ postgres_user }}
+      🗑️  UFW firewall rules: PostgreSQL profile
+      
+      ❗ This action will permanently delete ALL databases and data!
+      📊 All PostgreSQL data will be lost forever
+      
+      Are you sure you want to proceed with the uninstallation? (true/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Abort uninstallation - user chose not to proceed
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+      
+      The PostgreSQL service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+
+## 01. SHUTDOWN POSTGRES SERVICES
+# This section ensures that the service is stopped before config any changes and 
+# updates are applied to prevent conflict issues.
+# -----------------------------------------------------------------------------
+
+- name: Check if PostgreSQL service exists
+  ansible.builtin.stat:
+    path: "/lib/systemd/system/{{ postgres_systemd_name }}.service"
+  register: service_file
+  tags:
+    - install
+    - config
+
+- name: Ensure PostgreSQL service is stopped before modifying
+  ansible.builtin.systemd:
+    name: "{{ postgres_systemd_name }}"
+    state: stopped
+  become: true
+  failed_when: false
+  when: service_file.stat.exists
+  tags:
+    - install
+    - config
+
+- name: Stop and disable PostgreSQL service for uninstallation
+  ansible.builtin.systemd:
+    name: "{{ postgres_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+## 02. SET UP POSTGRES USER & CREATE SERVICE DIRECTORIES
+# This section sets up the system user and group to run the service and create 
+# all the directories for the service
+# -----------------------------------------------------------------------------
+
+- name: Create PostgreSQL system user "{{ postgres_user }}"
+  ansible.builtin.user:
+    name: "{{ postgres_user }}"
+    system: true
+    shell: /bin/bash
+    create_home: true
+    home: "{{ postgres_home_dir }}"
+    comment: "PostgreSQL Server System Account"
+  become: true
+  tags:
+    - install
+
+- name: Remove PostgreSQL user "{{ postgres_user }}"
+  ansible.builtin.user:
+    name: "{{ postgres_user }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Create directories for PostgreSQL service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ postgres_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ postgres_data_dir }}",   mode: "u=rwx,g=r,o="  }
+  become: true
+  tags:
+    - install
+
+- name: Remove directories for PostgreSQL service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop:
+    - { path: "{{ postgres_home_dir }}",   mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ postgres_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ postgres_data_dir }}",   mode: "u=rwx,g=r,o="  }
+  become: true
+  tags:
+    - never 
+    - uninstall
+
+
+## 03. DOWNLOAD, COMPILE, INSTALL & VERIFY POSTGRES
+# This section downloads any source or binary files, compiles if needs be and installs
+# into the `/usr/local/bin/`
+# -----------------------------------------------------------------------------
+
+- name: Update apt cache, install PostgreSQL dependencies and clean apt cache
+  ansible.builtin.apt:
+    name:
+      - bison                   # Parser generator for PostgreSQL grammar
+      - build-essential         # Compiler toolchain (gcc, make, etc.) for building PostgreSQL
+      - ca-certificates         # SSL/TLS certificates for secure downloads
+      - flex                    # Fast lexical analyzer generator
+      - libossp-uuid-dev        # UUID generation library for PostgreSQL UUID data type
+      - libreadline-dev         # Interactive command line editing library for psql
+      - libssl-dev              # SSL/TLS cryptographic library for secure connections
+      - libsystemd-dev          # Systemd library for service management 
+      - libxml2-dev             # XML parsing library for PostgreSQL XML support
+      - libxslt1-dev            # XSLT transformation library for PostgreSQL XML processing
+      - pkg-config              # Package configuration utility for managing library dependencies 
+      - wget                    # Download utility for fetching PostgreSQL source
+      - zlib1g-dev              # Compression library development files for PostgreSQL compression
+    state: present
+    update_cache: true
+  become: true
+  tags:
+    - install
+
+- name: Download PostgreSQL source release {{ databases_postgres.release }}
+  ansible.builtin.get_url:
+    url: "{{ postgres_download_url }}"
+    dest: "/tmp/postgresql.tar.gz"
+    mode: '0644'
+    timeout: 30
+  become: true
+  retries: 3
+  delay: 5
+  register: download_result
+  until: download_result is succeeded
+  tags:
+    - install
+
+- name: Ensure PostgreSQL source tmp directory exists before extract
+  ansible.builtin.file:
+    path: "/tmp/postgresql-{{ databases_postgres.release }}"
+    state: directory
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_user }}"
+    mode: '0755'
+  become: true
+  tags:
+    - install
+
+- name: Extract PostgreSQL to destination directory
+  ansible.builtin.unarchive:
+    src: "/tmp/postgresql.tar.gz"
+    dest: "/tmp/postgresql-{{ databases_postgres.release }}"
+    remote_src: true
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_user }}"
+    extra_opts: ["--strip-components=1"]
+  become: true
+  tags:
+    - install
+
+- name: Clean up PostgreSQL downloaded tarball
+  ansible.builtin.file:
+    path: "/tmp/postgresql.tar.gz"
+    state: absent
+  become: true
+  tags:
+    - install
+
+- name: Configure PostgreSQL build
+  ansible.builtin.command:
+    cmd: "./configure --prefix=/usr/local --with-openssl --with-libxml --with-libxslt --with-uuid=ossp --with-systemd"
+    chdir: "/tmp/postgresql-{{ databases_postgres.release }}"
+  become: true
+  become_user: "{{ postgres_user }}"
+  tags:
+    - install
+  changed_when: true
+
+- name: Build PostgreSQL
+  ansible.builtin.command:
+    cmd: "make -j2"
+    chdir: "/tmp/postgresql-{{ databases_postgres.release }}"
+  become: true
+  become_user: "{{ postgres_user }}"
+  tags:
+    - install
+  changed_when: true
+
+- name: Install PostgreSQL
+  ansible.builtin.command:
+    cmd: "make install"
+    chdir: "/tmp/postgresql-{{ databases_postgres.release }}"
+  become: true
+  tags:
+    - install
+  changed_when: true
+
+- name: Clean up PostgreSQL source directory
+  ansible.builtin.file:
+    path: "/tmp/postgresql-{{ databases_postgres.release }}"
+    state: absent
+  become: true
+  tags:
+    - install
+
+- name: Initialise PostgreSQL default database
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/initdb -D {{ postgres_data_dir }}"
+  args:
+    creates: "{{ postgres_data_dir }}/PG_VERSION"
+  become: true
+  become_user: "{{ postgres_user }}"
+  tags:
+    - install
+
+- name: Get installed PostgreSQL version
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/postgres --version"
+  register: installed_version_result
+  changed_when: false
+  failed_when: false
+  tags:
+    - install
+    - verify
+
+- name: Set installed version fact
+  ansible.builtin.set_fact:
+    postgres_installed_version: "{{ installed_version_result.stdout.split(' ')[2] }}"
+  when: installed_version_result.rc == 0
+  tags:
+    - install
+    - verify
+
+- name: PostgreSQL version comparison and validation
+  tags:
+    - verify
+    - healthcheck
+  block:
+    - name: Get latest PostgreSQL version from official website
+      ansible.builtin.uri:
+        url: "https://www.postgresql.org/versions/json/"
+        method: GET
+        return_content: true
+        timeout: 30
+      register: postgres_versions_json
+      failed_when: false
+
+
+    - name: Parse latest PostgreSQL version
+      ansible.builtin.set_fact:
+        postgres_latest_version: "{{ (postgres_versions_json.json | selectattr('supported', 'equalto', true) | map(attribute='version') | list | first) }}"
+      when:
+        - postgres_versions_json is succeeded
+        - postgres_versions_json.json is defined
+
+    - name: Compare installed version with latest available version
+      ansible.builtin.debug:
+        msg: |
+          📊 PostgreSQL Version Comparison:
+          ================================
+          Installed Version: {{ postgres_installed_version | default('unknown') }}
+          Expected Version:  {{ postgres.release | default('17.5') }}
+          Latest Version:    {{ postgres_latest_version | default('unable to fetch') }}
+          
+          {% if postgres_latest_version is defined and postgres_installed_version is defined %}
+          {% if postgres_installed_version == postgres_latest_version %}
+          ✅ Status: You are running the LATEST version of PostgreSQL!
+          {% else %}
+          ⚠️  Status: A newer version ({{ postgres_latest_version }}) is available
+          {% endif %}
+          {% else %}
+          ❓ Status: Unable to determine version comparison
+          {% endif %}
+
+    - name: Assert installed version is latest (optional enforcement)
+      ansible.builtin.assert:
+        that:
+          - postgres_installed_version == postgres_latest_version
+        fail_msg: |
+          ⚠️  PostgreSQL version check failed!
+          
+          Installed: {{ postgres_installed_version }}
+          Latest:    {{ postgres_latest_version }}
+          
+          Consider upgrading to the latest version for security updates and new features.
+        success_msg: "✅ PostgreSQL is running the latest version: {{ postgres_latest_version }}"
+      when: 
+        - postgres_latest_version is defined
+        - postgres_installed_version is defined
+        - postgres.enforce_latest_version | default(false)
+
+- name: Remove PostgreSQL binaries
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/usr/local/bin/postgres"
+    - "/usr/local/bin/initdb"
+    - "/usr/local/bin/psql"
+    - "/usr/local/bin/pg_ctl"
+    - "/usr/local/bin/createdb"
+    - "/usr/local/bin/dropdb"
+  become: true
+  tags:
+    - never
+    - uninstall
+
+
+
+## 04. SETUP CONFIG FILES FOR POSTGRES
+# This section sets up the configuration files file for the service
+# -----------------------------------------------------------------------------
+
+- name: Deploy PostgreSQL configuration file to "{{ postgres_config_dir}}/postgresql.conf"
+  ansible.builtin.template:
+    src: templates/postgresql.conf.j2
+    dest: "{{ postgres_config_dir}}/postgresql.conf"
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_user }}"
+    mode: '0600'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Deploy PostgreSQL HBA configuration file to "{{ postgres_config_dir}}/pg_hba.conf"
+  ansible.builtin.template:
+    src: templates/postgres-hba.conf.j2
+    dest: "{{ postgres_config_dir}}/pg_hba.conf"
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_user }}"
+    mode: '0600'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify PostgreSQL configuration file is valid
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/postgres --check -D {{ postgres_data_dir }}"
+  become: true
+  become_user: "{{ postgres_user }}"
+  register: config_verify
+  changed_when: false
+  failed_when: config_verify.rc != 0
+  tags:
+    - install
+    - config
+
+## 05. SETUP SYSTEMD FOR POSTGRES
+# This section sets up the systemd unit file for the service
+# -----------------------------------------------------------------------------
+
+- name: Deploy systemd unit for PostgreSQL
+  ansible.builtin.template:
+    src: templates/postgresql-systemd.service.j2
+    dest: "/lib/systemd/system/{{ postgres_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify PostgreSQL systemd service config is valid
+  ansible.builtin.command: "systemd-analyze verify /lib/systemd/system/{{ postgres_systemd_name }}.service"
+  register: systemd_verify
+  changed_when: false
+  failed_when: systemd_verify.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+
+- name: Reload systemd and start PostgreSQL service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ postgres_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify PostgreSQL service is active
+  ansible.builtin.systemd:
+    name: "{{ postgres_systemd_name }}"
+  register: postgres_service_status
+  changed_when: false
+  tags:
+    - verify
+    - healthcheck
+
+- name: Assert PostgreSQL service is running
+  ansible.builtin.assert:
+    that:
+      - postgres_service_status.status.ActiveState == "active"
+    fail_msg: "PostgreSQL service is NOT active."
+    success_msg: "PostgreSQL service is active."
+  tags:
+    - verify
+    - healthcheck
+
+- name: Delete Systemd service for PostgreSQL
+  ansible.builtin.file:
+    path: "/lib/systemd/system/{{ postgres_systemd_name }}.service"
+    state: absent
+  become: true
+  tags:
+    - never 
+    - uninstall
+
+- name: Reload systemd after removing service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  tags:
+    - never 
+    - uninstall
+
+## 06. SETUP FIREWALL FOR POSTGRES
+# This section sets up the firewall rules to allow the service traffic
+# -----------------------------------------------------------------------------
+
+- name: Deploy PostgreSQL UFW application profile
+  ansible.builtin.template:
+    src: templates/postgresql-ufw-profile.j2
+    dest: "/etc/ufw/applications.d/{{ postgres_systemd_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Reload UFW PostgreSQL application profiles
+  ansible.builtin.command: "ufw app update {{ postgres_systemd_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags:
+    - install
+    - config
+
+- name: Allow PostgreSQL through UFW using application profile
+  ansible.builtin.ufw:
+    rule: allow
+    name: "PostgreSQL"
+    comment: "Allow PostgreSQL ({{ postgres.port | default('5432') }}) from LOCAL NET"
+    src: "{{ item }}"
+  loop: "{{ local_networks }}"
+  become: true
+  tags:
+    - never
+    - firewall
+
+- name: Confirm PostgreSQL UFW profile is allowed for local networks
+  ansible.builtin.command: "ufw status numbered"
+  register: ufw_status
+  changed_when: false
+  tags:
+    - never
+    - firewall
+
+- name: Assert PostgreSQL UFW rule exists for each local network
+  ansible.builtin.assert:
+    that:
+      - "'PostgreSQL' in ufw_status.stdout and item in ufw_status.stdout"
+    fail_msg: "PostgreSQL UFW rule is NOT present for {{ item }}"
+    success_msg: "PostgreSQL UFW rule is present for {{ item }}"
+  loop: "{{ local_networks }}"
+  tags:
+    - never
+    - firewall
+
+- name: Remove UFW rules for PostgreSQL application profile
+  ansible.builtin.ufw:
+    rule: deny
+    name: "PostgreSQL"
+    delete: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove PostgreSQL UFW application profile
+  ansible.builtin.file:
+    path: "/etc/ufw/applications.d/{{ postgres_systemd_name }}"
+    state: absent
+  become: true
+  tags:
+    - uninstall
+    - never
+
+
+
+## 07. ADD ADMIN USER
+# This section adds an admin user for creating databases and users for other services
+# ------------------------------------------------------------------------------
+
+- name: Add PostgreSQL admin user with CREATEDB, CREATEROLE, LOGIN via psql
+  ansible.builtin.command: >
+    psql -h 127.0.0.1
+         -U postgres
+         -d postgres
+         -c "DO $$
+               BEGIN
+                 IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ databases_admin.user }}') THEN
+                   CREATE ROLE {{ databases_admin.user }} WITH LOGIN PASSWORD '{{ databases_admin.password }}' CREATEDB CREATEROLE;
+                 END IF;
+               END
+             $$;"
+  become: true
+  become_user: "{{ databases_postgres.user }}"
+  tags:
+    - install
+    - config
+
+
+## 07. HEALTH CHECKS FOR POSTGRES
+# This section runs the healthcheck for the service to confirm it is running
+# as expected
+# -----------------------------------------------------------------------------
+
+- name: Wait for PostgreSQL to be available
+  ansible.builtin.wait_for:
+    port: "{{ databases_postgres.port }}"
+    host: 127.0.0.1
+    timeout: 30
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check PostgreSQL service status
+  ansible.builtin.systemd:
+    name: "{{ postgres_systemd_name }}"
+  register: postgres_service_status
+  become: true
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert PostgreSQL is running
+  ansible.builtin.assert:
+    that:
+      - postgres_service_status.status.ActiveState == "active"
+    fail_msg: "PostgreSQL service is not running! Status: {{ postgres_service_status.status.ActiveState }}"
+    success_msg: "PostgreSQL service is running successfully."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Test PostgreSQL connection
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/psql -h 127.0.0.1 -p {{ databases_postgres.port }} -U {{ postgres_user }} -d postgres -c 'SELECT version();'"
+  become: true
+  become_user: "{{ postgres_user }}"
+  register: postgres_connection_test
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert PostgreSQL connection successful
+  ansible.builtin.assert:
+    that:
+      - postgres_connection_test.rc == 0
+      - "'PostgreSQL' in postgres_connection_test.stdout"
+    fail_msg: "PostgreSQL connection test failed!"
+    success_msg: "PostgreSQL connection test successful."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck

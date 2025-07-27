@@ -1,0 +1,21 @@
+# =============================================================================
+# UFW Application Profile for PostgreSQL Database Server
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!       ⚠️ 
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+# =============================================================================
+#
+# This file is managed by Ansible - DO NOT EDIT MANUALLY
+# Generated from: roles/debian/templates/postgresql-ufw-profile.j2
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# Any manual changes will be lost when Ansible runs again.
+# To modify this configuration, edit the template file and re-run the playbook.
+#
+# =============================================================================
+
+[PostgreSQL]
+title=PostgreSQL Database Server
+description=PostgreSQL is a powerful, open source object-relational database system
+ports={{ databases_postgres.port }}/tcp

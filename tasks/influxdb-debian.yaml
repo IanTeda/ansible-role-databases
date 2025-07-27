@@ -1,0 +1,544 @@
+---
+
+
+## 00. SET INFLUXDB ANSIBLE FACTS
+# This makes it easier to read the ansible tasks
+# -----------------------------------------------------------------------------
+
+- name: Set Influxdb facts for the role
+  ansible.builtin.set_fact:
+    influxdb_user: "{{ databases_influxdb.user }}"
+    influxdb_group: "{{ databases_influxdb.group }}"
+    influxdb_home_dir: "/opt/{{ databases_influxdb.user }}"
+    influxdb_config_dir: "/etc/{{ databases_influxdb.user }}"
+    influxdb_config_file: "/etc/{{ databases_influxdb.user }}/{{ databases_influxdb.user }}.conf"
+    influxdb_data_dir: "/data/{{ databases_influxdb.user }}"
+    influxdb_systemd_name: "{{ databases_influxdb.user }}"
+    influxdb_download_url: "https://github.com/influxdata/influxdb/archive/refs/tags/v{{ databases_influxdb.release }}.tar.gz"
+    influxdb_binary_path: "/usr/local/bin/{{ databases_influxdb.user }}"
+  tags:
+    - install
+    - config
+    - build
+    - healthcheck
+    - uninstall
+
+- name: Display influxdb variables for debugging
+  ansible.builtin.debug:
+    var: databases_influxdb
+  tags:
+    - debug
+
+- name: Display influxdb facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> influxdb_user: {{ influxdb_user }}"
+      - "Fact -> influxdb_group: {{ influxdb_group }}"
+      - "Fact -> influxdb_home_dir: {{ influxdb_home_dir }}"
+      - "Fact -> influxdb_config_dir: {{ influxdb_config_dir }}"
+      - "Fact -> influxdb_config_file: {{ influxdb_config_file }}"
+      - "Fact -> influxdb_data_dir: {{ influxdb_data_dir }}"
+      - "Fact -> influxdb_systemd_name: {{ influxdb_systemd_name }}"
+      - "Fact -> influxdb_download_url: {{ influxdb_download_url }}"
+      - "Fact -> influxdb_binary_path: {{ influxdb_binary_path }}"
+  tags:
+    - debug
+
+- name: Confirm influxdb uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: influxdb Uninstallation Confirmation ⚠️
+      
+      You are about to completely uninstall the influxdb service from this system.
+      
+      This will remove:
+      🗑️  Service binary: {{ influxdb_binary_path }}
+      🗑️  Systemd service: {{ influxdb_systemd_name }}.service
+      🗑️  Configuration files: {{ influxdb_config_dir }}/
+      🗑️  User account: {{ influxdb_user }}
+      🗑️  UFW firewall rules: influxdb profile
+      🗑️  Prometheus scraper config: /etc/prometheus/conf.d/{{ influxdb_systemd_name }}.yml
+      
+      ❗ This action will stop metrics collection from your influxdb instance!
+      📊 Historical metrics data in Prometheus will be preserved
+      
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Uninstallation Aborted
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+      
+      The influxdb service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+
+## 01. SHUTDOWN INFLUXDB SERVICES
+# This section ensures that the service is stopped before config changes and
+# updates are applied to prevent conflict issues.
+# -----------------------------------------------------------------------------
+
+- name: Check if influxdb service exists
+  ansible.builtin.stat:
+    path: "/lib/systemd/system/{{ influxdb_systemd_name }}.service"
+  register: service_file
+  tags:
+    - install
+    - config
+
+- name: Ensure influxdb service is stopped before modifying
+  ansible.builtin.systemd:
+    name: "{{ influxdb_systemd_name }}"
+    state: stopped
+  become: true
+  failed_when: false
+  when: service_file.stat.exists
+  tags:
+    - install
+    - config
+
+- name: Stop and disable influxdb service during uninstallation
+  when: uninstall_confirmation.user_input | bool
+  ansible.builtin.systemd:
+    name: "{{ influxdb_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+## 02. SET UP INFLUXDB USER & CREATE SERVICE DIRECTORIES
+# This section sets up the system user and group to run the service and create
+# all the directories for the service
+# -----------------------------------------------------------------------------
+
+- name: Ensure {{ influxdb_group }} group exists
+  ansible.builtin.group:
+    name: "{{ influxdb_group }}"
+    state: present
+  become: true
+  tags:
+    - user_group
+    - install
+
+- name: Create influxdb system user "{{ influxdb_user }}"
+  ansible.builtin.user:
+    name: "{{ influxdb_user }}"
+    group: "{{ influxdb_group }}"
+    system: yes
+    shell: /usr/sbin/nologin
+    create_home: yes
+    home: "{{ influxdb_home_dir }}"
+    comment: "InfluxDB Service System Account"
+  become: true
+  tags:
+    - user_group
+    - install
+
+- name: Remove influxdb user "{{ influxdb_user }}"
+  ansible.builtin.user:
+    name: "{{ influxdb_user }}"
+    state: absent
+    remove: yes
+    force: yes
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Create directories for influxdb service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ influxdb_user }}"
+    group: "{{ influxdb_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ influxdb_config_dir }}", mode: "u=rwx,g=rw,o="}
+    - { path: "{{ influxdb_data_dir }}",   mode: "u=rwx,g=r,o="}
+  become: true
+  tags:
+    - directories
+    - install
+
+- name: Remove directories for influxdb service during uninstallation
+  when: uninstall_confirmation.user_input | bool
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop:
+    - { path: "{{ influxdb_home_dir }}",   mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ influxdb_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ influxdb_data_dir }}",   mode: "u=rwx,g=r,o="  }
+  become: true
+  tags:
+    - never 
+    - uninstall
+
+## 03. DOWNLOAD, BUILD, INSTALL & VERIFY INFLUXDB
+# This section downloads and compiles the InfluxDB service binary
+# -----------------------------------------------------------------------------
+
+- name: Install required packages for building InfluxDB
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - gcc
+      - g++
+      - binutils
+      - pkg-config
+      - libssl-dev
+      - ca-certificates
+      - golang
+      - python3
+      - python3.11-dev
+      - protobuf-compiler
+      - lld
+    state: present
+    update_cache: yes
+    force: yes
+  become: true
+  tags:
+    - install
+    - build
+
+- name: Debug linker for build user
+  ansible.builtin.shell: |
+    which ld && ld --version && which gcc && gcc --version
+  become: true
+  become_user: "{{ influxdb_user }}"
+  register: linker_check
+  ignore_errors: true
+  tags:
+    - debug
+
+- name: Show linker debug output
+  ansible.builtin.debug:
+    var: linker_check.stdout_lines
+  tags:
+    - debug
+
+- name: Debug Go and Rust versions for build user
+  ansible.builtin.shell: |
+    go version && rustc --version && cargo --version
+  become: true
+  become_user: "{{ influxdb_user }}"
+  register: gorust_check
+  ignore_errors: true
+  tags:
+    - debug
+
+- name: Show Go/Rust debug output
+  ansible.builtin.debug:
+    var: gorust_check.stdout_lines
+  tags:
+    - debug
+
+- name: "Install rustup for '{{ influxdb_user }}' user"
+  ansible.builtin.shell: |
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+  become: true
+  become_user: "{{ influxdb_user }}"
+  tags:
+    - install
+    - build
+
+- name: "Ensure rustup is initialized for '{{ influxdb_user }}' user"
+  ansible.builtin.command:
+    cmd: "rustup toolchain install stable"
+    creates: "{{ influxdb_home_dir }}/.cargo/bin/rustc"
+  become: true
+  become_user: "{{ influxdb_user }}"
+  tags:
+    - install
+    - build
+
+- name: "Clone InfluxDB repo at tag v{{ databases_influxdb.release }}"
+  ansible.builtin.get_url:
+    url: "{{ influxdb_download_url }}"
+    dest: "/tmp/influxdb.tar.gz"
+    owner: "{{ influxdb_user }}"
+    group: "{{ influxdb_group }}"
+    mode: '0644'
+  tags:
+    - install
+    - build
+
+- name: Clone InfluxDB git repository at release tag
+  ansible.builtin.git:
+    repo: 'https://github.com/influxdata/influxdb.git'
+    dest: "/tmp/influxdb-{{ databases_influxdb.release }}"
+    version: "v{{ databases_influxdb.release }}"
+    update: no
+    force: yes
+    clone: yes
+    accept_hostkey: yes
+  become: true
+  become_user: "{{ influxdb_user }}"
+  tags:
+    - install
+    - build
+
+- name: Ensure build user owns all source files before building
+  ansible.builtin.file:
+    path: "/tmp/influxdb-{{ databases_influxdb.release }}"
+    state: directory
+    owner: "{{ influxdb_user }}"
+    group: "{{ influxdb_group }}"
+    recurse: yes
+  become: true
+  tags:
+    - install
+    - build
+
+- name: Build InfluxDB with cargo
+  ansible.builtin.shell: |
+    {{ influxdb_home_dir }}/.cargo/bin/cargo build --release
+  args:
+    chdir: "/tmp/influxdb-{{ databases_influxdb.release }}"
+  environment:
+    RUSTUP_HOME: "{{ influxdb_home_dir }}/.rustup"
+    CARGO_HOME: "{{ influxdb_home_dir }}/.cargo"
+    PATH: "{{ influxdb_home_dir }}/.cargo/bin:{{ ansible_env.PATH }}"
+  become: true
+  become_user: "{{ influxdb_user }}"
+  tags:
+    - install
+    - build
+
+- name: Install compiled influxdb binary
+  ansible.builtin.copy:
+    src: '/tmp/influxdb-{{ databases_influxdb.release }}/target/release/influxdb3'
+    dest: '{{ influxdb_binary_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+    remote_src: yes
+  become: true
+  tags:
+    - install
+    - build
+
+- name: Remove InfluxDB source directory after build
+  ansible.builtin.file:
+    path: "/tmp/influxdb-{{ databases_influxdb.release }}"
+    state: absent
+  tags:
+    - install
+    - cleanup
+    - build
+
+- name: Uninstall compiled influxdb binary
+  ansible.builtin.file:
+    path: '{{ influxdb_binary_path }}'
+    state: absent
+  tags:
+    - uninstall
+    - influxdb
+
+
+
+
+# - name: Download InfluxDB binary
+#   ansible.builtin.get_url:
+#     url: "https://dl.influxdata.com/influxdb/releases/influxdb2-2.7.5-linux-amd64.tar.gz"
+#     dest: /tmp/influxdb.tar.gz
+#     mode: '0644'
+#   become: true
+#   tags:
+#     - install
+#     - influxdb
+
+# - name: Extract InfluxDB binary
+#   ansible.builtin.unarchive:
+#     src: /tmp/influxdb.tar.gz
+#     dest: /usr/local/
+#     remote_src: yes
+#     creates: /usr/local/influxdb2-2.7.5-linux-amd64
+#   become: true
+#   tags:
+#     - install
+#     - influxdb
+
+# - name: Symlink influxdb binary to /usr/local/bin
+#   ansible.builtin.file:
+#     src: /usr/local/influxdb2-2.7.5-linux-amd64/influxd
+#     dest: /usr/local/bin/influxd
+#     state: link
+#     force: yes
+#   become: true
+#   tags:
+#     - install
+#     - influxdb
+
+
+
+
+
+
+# - name: Install InfluxDB
+#   ansible.builtin.apt:
+#     name: influxdb
+#     state: present
+#     update_cache: yes
+#   become: true
+#   tags:
+#     - install
+#     - influxdb
+
+# - name: Ensure influxdb user exists
+#   ansible.builtin.user:
+#     name: influxdb
+#     system: yes
+#     shell: /usr/sbin/nologin
+#   become: true
+#   tags:
+#     - install
+#     - influxdb
+
+# - name: Deploy InfluxDB configuration
+#   ansible.builtin.template:
+#     src: templates/influxdb.conf.j2
+#     dest: /etc/influxdb/influxdb.conf
+#     owner: influxdb
+#     group: influxdb
+#     mode: '0640'
+#   become: true
+#   notify: Restart InfluxDB
+#   tags:
+#     - config
+#     - influxdb
+
+# - name: Deploy InfluxDB systemd service unit
+#   ansible.builtin.template:
+#     src: templates/influxdb-systemd.service.j2
+#     dest: /etc/systemd/system/influxdb.service
+#     owner: root
+#     group: root
+#     mode: '0644'
+#   become: true
+#   notify: Reload systemd
+#   tags:
+#     - config
+#     - influxdb
+
+# - name: Reload systemd
+#   ansible.builtin.systemd:
+#     daemon_reload: yes
+#   become: true
+#   tags:
+#     - config
+#     - influxdb
+
+# - name: Enable and start InfluxDB service
+#   ansible.builtin.systemd:
+#     name: influxdb
+#     enabled: yes
+#     state: started
+#   become: true
+#   tags:
+#     - install
+#     - config
+#     - influxdb
+
+# - name: Verify InfluxDB service is running
+#   ansible.builtin.systemd:
+#     name: influxdb
+#     state: started
+#   register: influxdb_status
+#   become: true
+#   tags:
+#     - verify
+#     - influxdb
+
+# - name: Check InfluxDB HTTP API
+#   ansible.builtin.uri:
+#     url: http://localhost:8086/ping
+#     method: GET
+#     status_code: 204
+#     return_content: no
+#   register: influxdb_api
+#   tags:
+#     - verify
+#     - influxdb
+
+# - name: Deploy UFW application profile for InfluxDB
+#   ansible.builtin.template:
+#     src: templates/influxdb.ufw.profile.j2
+#     dest: /etc/ufw/applications.d/influxdb
+#     owner: root
+#     group: root
+#     mode: '0644'
+#   become: true
+#   tags:
+#     - config
+#     - ufw
+#     - influxdb
+
+# - name: Allow InfluxDB through UFW
+#   ansible.builtin.ufw:
+#     rule: allow
+#     name: influxdb
+#   become: true
+#   tags:
+#     - config
+#     - ufw
+#     - influxdb
+
+# - name: Uninstall InfluxDB
+#   ansible.builtin.apt:
+#     name: influxdb
+#     state: absent
+#   become: true
+#   tags:
+#     - uninstall
+#     - influxdb
+
+# - name: Remove InfluxDB configuration
+#   ansible.builtin.file:
+#     path: /etc/influxdb/influxdb.conf
+#     state: absent
+#   become: true
+#   tags:
+#     - uninstall
+#     - influxdb
+
+# - name: Remove InfluxDB systemd service unit
+#   ansible.builtin.file:
+#     path: /etc/systemd/system/influxdb.service
+#     state: absent
+#   become: true
+#   tags:
+#     - uninstall
+#     - influxdb
+
+# - name: Remove UFW application profile for InfluxDB
+#   ansible.builtin.file:
+#     path: /etc/ufw/applications.d/influxdb
+#     state: absent
+#   become: true
+#   tags:
+#     - uninstall
+#     - ufw
+#     - influxdb
+
+# - name: Disable InfluxDB service
+#   ansible.builtin.systemd:
+#     name: influxdb
+#     enabled: no
+#     state: stopped
+#   become: true
+#   tags:
+#     - uninstall
+#     - influxdb

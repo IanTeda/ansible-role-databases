@@ -1,0 +1,426 @@
+---
+# VALKEY INSTALLATION AND CONFIGURATION (BINARY)
+# ==============================================================================
+# This Ansible task file installs and configures Valkey (a Redis alternative)
+# from official binaries on Debian systems. It creates a dedicated user,
+# sets up required directories, deploys configuration and systemd unit files,
+# and ensures the service is running and healthy.
+#
+# Features:
+#   - Installs Valkey from official tarball (no .deb required; not in Debian main repo)
+#   - Creates dedicated 'valkey' system user and secure directories
+#   - Deploys /etc/valkey/databases_valkey.conf and /lib/systemd/system/databases_valkey.service
+#   - Installs valkey-server and valkey-cli to /usr/local/bin
+#   - Cleans up temporary files after install
+#   - Verifies service status and health (ping)
+#
+# Variables:
+#   - databases_valkey.release: Valkey version (e.g., 8.1.2)
+#   - databases_valkey.user: System user to run Valkey (default: valkey)
+#
+# Requirements:
+#   - Debian-based system
+#   - Systemd
+#   - Sufficient privileges (become: true)
+#
+# Security Notes:
+#   - Service runs as unprivileged 'valkey' user
+#   - Data and log directories are owned by 'valkey' and not world-readable
+#   - Config file permissions are restrictive (0640)
+#
+# Troubleshooting:
+#   - Check logs: journalctl -u valkey, /var/log/valkey/databases_valkey.log
+#   - Test manually: valkey-cli ping
+#   - If service fails, check /etc/valkey/databases_valkey.conf and permissions
+#
+# References:
+#   - https://databases_valkey.io/
+#   - https://databases_valkey.io/docs/
+#   - https://github.com/valkey-io/valkey
+#
+# Update 2025-06-30:
+#   - Initial version created
+#   - Updated documentation
+# ==============================================================================
+
+
+
+## 00. SET VALKEY ANSIBLE FACTS
+# This makes it easier to read the ansible tasks
+# -----------------------------------------------------------------------------
+
+- name: Set Valkey facts for the role
+  ansible.builtin.set_fact:
+    valkey_home_dir: "/opt/{{ databases_valkey.user }}"
+    valkey_config_dir: "/etc/{{ databases_valkey.user }}"
+    valkey_data_dir: "/data/{{ databases_valkey.user }}"
+    valkey_run_dir: "/run/{{ databases_valkey.user }}"
+    valkey_systemd_name: "{{ databases_valkey.user }}"
+    valkey_download_url: "https://download.databases_valkey.io/releases/valkey-{{ databases_valkey.release }}-jammy-x86_64.tar.gz"
+    valkey_binary_path: "/usr/local/bin/{{ databases_valkey.user }}"
+  tags:
+    - install
+    - config
+    - healthcheck
+
+- name: Display Valkey variables for debugging
+  ansible.builtin.debug:
+    var: databases_valkey
+  tags:
+    - debug
+
+- name: Display Valkey facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> valkey_user: {{ valkey_user }}"
+      - "Fact -> valkey_group: {{ valkey_group }}"
+      - "Fact -> valkey_home_dir: {{ valkey_home_dir }}"
+      - "Fact -> valkey_config_dir: {{ valkey_config_dir }}"
+      - "Fact -> valkey_config_file: {{ valkey_config_file }}"
+      - "Fact -> valkey_data_dir: {{ valkey_data_dir }}"
+      - "Fact -> valkey_systemd_name: {{ valkey_systemd_name }}"
+      - "Fact -> valkey_download_url: {{ valkey_download_url }}"
+      - "Fact -> valkey_binary_path: {{ valkey_binary_path }}"
+  tags:
+    - debug
+
+
+## 01. SHUTDOWN VALKEY SERVICES
+# This section ensures that the service is stopped before config any changes and
+# updates are applied to prevent conflict issues.
+# -----------------------------------------------------------------------------
+
+- name: Check if Valkey service exists
+  ansible.builtin.stat:
+    path: "/lib/systemd/system/{{ valkey_systemd_name }}.service"
+  register: service_file
+  tags:
+    - install
+    - config
+
+- name: Ensure Valkey service is stopped before modifying
+  ansible.builtin.systemd:
+    name: "{{ valkey_systemd_name }}"
+    state: stopped
+  become: true
+  failed_when: false
+  when: service_file.stat.exists
+  tags:
+    - install
+    - config
+
+
+## 02. SET UP VALKEY USER & CREATE SERVICE DIRECTORIES
+# This section sets up the system user and group to run the service and create
+# all the directories for the service
+# -----------------------------------------------------------------------------
+
+- name: Create Valkey system user
+  ansible.builtin.user:
+    name: "{{ databases_valkey.user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    # create_home: true
+    # home: "{{ valkey_home_dir }}"
+    comment: "Valkey service system account"
+  become: true
+  tags:
+    - install
+
+- name: Create directories for Valkey service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ databases_valkey.user }}"
+    group: "{{ databases_valkey.user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    # - { path: "{{ valkey_home_dir }}",   mode: "u=rwx,g=rw,o="}
+    - { path: "{{ valkey_config_dir }}", mode: "u=rwx,g=r,o="}
+    - { path: "{{ valkey_data_dir }}",   mode: "u=rwx,g=,o="}
+    - { path: "{{ valkey_run_dir}}",     mode: "u=rwx,g=r,o="}
+  become: true
+  tags:
+    - install
+
+
+
+## 03. DOWNLOAD, INSTALL BINARIES & VERIFY VALKEY
+# This section downloads any source or binary files, compiles if needs be and installs
+# into the `/usr/local/bin/`
+# -----------------------------------------------------------------------------
+
+- name: Download Valkey tarball from databases_valkey.io (x86_64)
+  ansible.builtin.get_url:
+    url: "{{ valkey_download_url }}"
+    dest: "/tmp/databases_valkey.tar.gz"
+    mode: '0644'
+  tags:
+    - install
+
+- name: Extract Valkey tarball
+  ansible.builtin.unarchive:
+    src: "/tmp/databases_valkey.tar.gz"
+    dest: "{{ valkey_home_dir }}"
+    remote_src: true
+    creates: "/tmp/valkey/valkey-server"
+    extra_opts:
+      - --strip-components=1
+  tags:
+    - install
+
+- name: Copy Valkey binaries to /usr/local/bin
+  ansible.builtin.copy:
+    src: "{{ valkey_home_dir }}/bin/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - valkey-server
+    - valkey-cli
+  become: true
+  tags:
+    - install
+
+- name: Verify Valkey binaries are installed and executable
+  ansible.builtin.command: "{{ item }} --version"
+  loop:
+    - valkey-server
+    - valkey-cli
+  register: valkey_bin_check
+  changed_when: false
+  failed_when: valkey_bin_check.rc != 0
+  tags:
+    - install
+    - verify
+
+- name: Clean up downloaded Valkey tarball and extracted files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/tmp/databases_valkey.tar.gz"
+    - "/tmp/valkey"
+  tags:
+    - install
+
+
+
+## 04. SETUP CONFIG FILES FOR VALKEY
+# This section sets up the configuration files file for the service
+# -----------------------------------------------------------------------------
+
+- name: Deploy Valkey configuration file to "{{ valkey_config_dir }}/databases_valkey.conf"
+  ansible.builtin.template:
+    src: "templates/databases_valkey.conf.j2"
+    dest: "{{ valkey_config_dir }}/databases_valkey.conf"
+    owner: "{{ databases_valkey.user }}"
+    group: "{{ databases_valkey.user }}"
+    mode: '0640'
+  become: true
+  tags:
+    - install
+    - config
+
+# See: https://github.com/jemalloc/jemalloc/issues/1328 for why overcommit_memory is important for Redis/Valkey fork() operations
+- name: Ensure memory overcommit is enabled for Valkey
+  ansible.builtin.sysctl:
+    name: vm.overcommit_memory
+    value: '1'
+    state: present
+    sysctl_set: true
+    reload: true
+  become: true
+  tags:
+    - sysctl-on
+
+- name: Apply vm.overcommit_memory=1 immediately
+  ansible.builtin.command: sysctl vm.overcommit_memory=1
+  become: true
+  changed_when: false
+  tags:
+    - sysctl-on
+
+- name: Remove memory overcommit (set to 0)
+  ansible.builtin.sysctl:
+    name: vm.overcommit_memory
+    value: '0'
+    state: present
+    sysctl_set: true
+    reload: true
+  become: true
+  tags:
+    - sysctl-off
+
+
+
+## 05. SETUP SYSTEMD FOR VALKEY
+# This section sets up the systemd unit file for the service
+# -----------------------------------------------------------------------------
+
+- name: Deploy Valkey systemd service unit
+  ansible.builtin.template:
+    src: templates/databases_valkey.service.j2
+    dest: "/lib/systemd/system/{{ valkey_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify Valkey systemd service config is valid
+  ansible.builtin.command: systemd-analyze verify /lib/systemd/system/{{ valkey_systemd_name }}.service
+  register: systemd_verify
+  changed_when: false
+  failed_when: systemd_verify.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+
+- name: Reload systemd and start Valkey service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ valkey_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Wait for Valkey server to be available
+  ansible.builtin.wait_for:
+    port: "{{ databases_valkey.port | default('6379') }}"
+    host: 127.0.0.1
+    timeout: 30
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check Valkey service status
+  ansible.builtin.systemd:
+    name: "{{ valkey_systemd_name }}"
+  register: valkey_status
+  become: true
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert Valkey is running
+  ansible.builtin.assert:
+    that:
+      - valkey_status.status.ActiveState == "active"
+      - valkey_status.status.SubState == "running"
+    fail_msg: "Valkey service is not running! Status: {{ valkey_status.status.ActiveState }}"
+    success_msg: "Valkey service is running successfully."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+
+
+## 06. SETUP FIREWALL FOR VALKEY
+# This section sets up the firewall rules to allow the service traffic
+# -----------------------------------------------------------------------------
+
+# Nil
+
+
+
+## 07. SETUP NGINX PROXY FOR VALKEY
+# This section sets up the Nginx proxy location
+# -----------------------------------------------------------------------------
+
+# Nil
+
+
+
+## 08. HEALTH CHECKS FOR VALKEY
+# This section runs the healthcheck for the service to confirm it is running
+# as expected
+# -----------------------------------------------------------------------------
+
+- name: Test Valkey ping command
+  ansible.builtin.command: valkey-cli ping
+  register: valkey_ping
+  changed_when: false
+  failed_when: valkey_ping.stdout.strip() != 'PONG'
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Show Valkey ping result
+  ansible.builtin.debug:
+    msg: "Valkey ping result: {{ valkey_ping.stdout }}"
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Get Valkey INFO output
+  ansible.builtin.command: valkey-cli info
+  register: valkey_info
+  changed_when: false
+  failed_when: valkey_info.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert Valkey role is master or replica
+  ansible.builtin.assert:
+    that:
+      - "'role:master' in valkey_info.stdout or 'role:replica' in valkey_info.stdout or 'role:slave' in valkey_info.stdout"
+    fail_msg: "Valkey is not running as master or replica. INFO output: {{ valkey_info.stdout }}"
+    success_msg: "Valkey role is valid (master/replica)."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check Valkey used memory is below 90% of system memory
+  ansible.builtin.shell: |
+    total_mem=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+    used_mem=$(valkey-cli info | awk -F: '/used_memory:/ {print $2}' | head -n1)
+    # Convert to kB for comparison
+    used_mem_kb=$((used_mem/1024))
+    threshold=$((total_mem * 90 / 100))
+    if [ "$used_mem_kb" -lt "$threshold" ]; then exit 0; else exit 1; fi
+  register: valkey_mem_check
+  changed_when: false
+  failed_when: valkey_mem_check.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Test Valkey password authentication
+  ansible.builtin.command: valkey-cli -a "{{ databases_valkey.password | default('') }}" ping
+  register: valkey_auth_ping
+  changed_when: false
+  failed_when:
+    - valkey_auth_ping.rc != 0
+    - valkey_auth_ping.stdout.strip() != 'PONG'
+  when: databases_valkey.password is defined and databases_valkey.password|length > 0
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck

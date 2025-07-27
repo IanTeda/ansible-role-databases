@@ -1,0 +1,253 @@
+# ============================================================================
+# ADMINER INSTALLATION AND NGINX INTEGRATION (DEBIAN)
+# ============================================================================
+# Installs Adminer (single PHP file) and configures nginx to serve it securely.
+# ============================================================================
+
+
+## 00. SET ADMINER ANSIBLE FACTS
+# This makes it easier to read the ansible tasks
+# -----------------------------------------------------------------------------
+
+- name: Set Adminer facts for the role
+  ansible.builtin.set_fact:
+    adminer_www_dir: "/var/www/{{ databases_adminer.path_prefix }}"
+    adminer_download_url: "https://github.com/vrana/adminer/releases/download/v{{ databases_adminer.release }}/adminer-{{ databases_adminer.release }}.php"
+  tags:
+    - install
+    - config
+    - uninstall
+
+- name: Display Adminer variables for debugging
+  ansible.builtin.debug:
+    var: databases_adminer
+  tags:
+    - debug
+
+- name: Display Adminer facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> adminer_www_dir: {{ adminer_www_dir }}"
+      - "Fact -> adminer_download_url: {{ adminer_download_url }}"
+  tags:
+    - debug
+
+- name: Confirm Adminer uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: Adminer Uninstallation Confirmation ⚠️
+      
+      You are about to completely uninstall Adminer from this system.
+      
+      This will remove:
+      🗑️  Adminer PHP application
+      🗑️  Nginx configuration: /etc/nginx/conf.d/{{ ansible_hostname }}-adminer.conf
+      
+      ❗ This action will remove database administration web interface!
+      📊 Database access will need to be done via command line
+      
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Aborted Adminer uninstallation
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+      
+      The Adminer service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+## 02. SET UP ADMINER WEB ROOT DIRECTORY & DOWNLOAD PHP FILE
+# This section sets up the system user and group to run the service and create
+# all the directories for the service
+# -----------------------------------------------------------------------------
+
+- name: Create Adminer web root directory
+  ansible.builtin.file:
+    path: "/var/www/{{ databases_adminer.path_prefix }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  become: true
+  tags:
+    - install
+
+- name: Download Adminer PHP file for v{{ databases_adminer.release }}
+  ansible.builtin.get_url:
+    url: "{{ adminer_download_url }}"
+    dest: /var/www/adminer/index.php
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    force: yes
+  become: true
+  tags:
+    - install
+
+
+## 05. SETUP NGINX FOR ADMINER
+# This section sets up the nginx configuration for the web interface
+# -----------------------------------------------------------------------------
+
+- name: Ensure nginx and PHP are installed
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - php-fpm
+    state: present
+    update_cache: yes
+  become: true
+  tags:
+    - install
+
+- name: Check nginx service is running
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+  register: nginx_status
+  changed_when: false
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+- name: Assert nginx is active
+  ansible.builtin.assert:
+    that:
+      - nginx_status.status.ActiveState == 'active'
+    fail_msg: "Nginx is NOT running."
+    success_msg: "Nginx is running."
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+- name: Get PHP version
+  ansible.builtin.command: php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;'
+  register: php_version_result
+  changed_when: false
+  failed_when: php_version_result.rc != 0
+  tags:
+    - install
+    - verify
+
+- name: Set fact for PHP version (e.g. 8.2)
+  ansible.builtin.set_fact:
+    adminer_php_version: "{{ php_version_result.stdout }}"
+  tags:
+    - install
+    - verify
+
+- name: Check PHP-FPM service is running
+  ansible.builtin.systemd:
+    name: "php{{ adminer_php_version }}-fpm"
+    state: started
+  register: php_fpm_status
+  changed_when: false
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+- name: Assert PHP-FPM is active
+  ansible.builtin.assert:
+    that:
+      - php_fpm_status.status.ActiveState == 'active'
+    fail_msg: "PHP-FPM (php{{ adminer_php_version }}-fpm) is NOT running."
+    success_msg: "PHP-FPM (php{{ adminer_php_version }}-fpm) is running."
+  tags:
+    - verify
+    - healthcheck
+
+- name: Deploy nginx site config for Adminer
+  ansible.builtin.template:
+    src: templates/adminer-nginx-location.conf.j2
+    dest: "/etc/nginx/conf.d/{{ ansible_hostname }}-{{ databases_adminer.user }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Test nginx configuration
+  ansible.builtin.command: nginx -t
+  register: nginx_test
+  changed_when: false
+  failed_when: nginx_test.rc != 0
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  become: true
+  tags:
+    - install
+    - config
+
+
+## 08. HEALTH CHECKS FOR ADMINER
+# This section runs the healthcheck for the service to confirm it is running
+# as expected
+# -----------------------------------------------------------------------------
+
+- name: Wait for Adminer to be available
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 80
+    delay: 3
+    timeout: 20
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+- name: Check Adminer web interface
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/adminer/"
+    method: GET
+    status_code: 200
+  register: adminer_health
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+- name: Assert Adminer is healthy
+  ansible.builtin.assert:
+    that:
+      - adminer_health.status == 200
+    fail_msg: "Adminer health check endpoint failed."
+    success_msg: "Adminer health check endpoint is responding correctly."
+  tags:
+    - install
+    - verify
+    - healthcheck
+
+
+- name: Display Adminer access information
+  ansible.builtin.debug:
+    msg:
+      - "=== Adminer Health Check Summary ==="
+      - "Nginx Status: {{ nginx_status.status.ActiveState }}"
+      - "PHP-FPM (php{{ adminer_php_version }}-fpm) Status: {{ php_fpm_status.status.ActiveState }}"
+      - "Web UI: http://{{ ansible_host | default('localhost') }}/adminer/"
+      - "Health Status: {{ adminer_health.status }} (Healthy)"
+      - "=== End Summary ==="
+  tags:
+    - install
+    - verify
+    - healthcheck

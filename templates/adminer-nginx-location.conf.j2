@@ -1,0 +1,34 @@
+# =============================================================================
+# Nginx Location Block for Adminer Database Administration Tool
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY! ⚠️
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+#
+# Generated from: roles/debian/templates/adminer-nginx-location.j2
+# Deploy path: "/etc/nginx/conf.d/{{ ansible_hostname }}-adminer.conf"
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# =============================================================================
+
+
+location /adminer {
+    alias /var/www/adminer/;
+    index index.php;
+
+    location ~ ^/adminer/(.+\.php)$ {
+        alias /var/www/adminer/$1;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME /var/www/adminer/$1;
+        include fastcgi_params;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_param HTTPS $https if_not_empty;
+    }
+
+    # Deny access to .ht* files
+    location ~ /adminer/\.ht {
+        deny all;
+    }
+}
+

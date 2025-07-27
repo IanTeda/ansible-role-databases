@@ -1,0 +1,43 @@
+# =============================================================================
+# Adminer Configuration File
+# =============================================================================
+#
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!       ⚠️ 
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+#
+# Generated from: roles/debian/templates/adminer.conf.j2
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# =============================================================================
+
+# Database connection timeout (seconds)
+DB_TIMEOUT={{ adminer.db_timeout | default('30') }}
+
+# Maximum upload size (MB)
+MAX_UPLOAD_SIZE={{ adminer.max_upload_size | default('8') }}
+
+# Session timeout (seconds)
+SESSION_TIMEOUT={{ adminer.session_timeout | default('3600') }}
+
+# Enable/disable plugins
+ENABLE_PLUGINS={{ adminer.enable_plugins | default('true') }}
+
+# Custom CSS theme
+CUSTOM_THEME={{ adminer.custom_theme | default('default') }}
+
+# Default database server
+DEFAULT_SERVER={{ adminer.default_server | default('localhost') }}
+
+# Allowed database types
+ALLOWED_DATABASES={{ adminer.allowed_databases | default('postgresql,mysql,sqlite') }}
+
+# Security settings
+ENABLE_LOGIN_PROTECTION={{ adminer.enable_login_protection | default('true') }}
+MAX_LOGIN_ATTEMPTS={{ adminer.max_login_attempts | default('5') }}
+LOGIN_LOCKOUT_TIME={{ adminer.login_lockout_time | default('300') }}
+
+# Logging
+ENABLE_LOGGING={{ adminer.enable_logging | default('false') }}
+LOG_LEVEL={{ adminer.log_level | default('INFO') }}
+LOG_FILE={{ adminer.log_file | default('/var/log/adminer.log') }}

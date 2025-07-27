@@ -1,0 +1,525 @@
+# 00. SET MARIADB ANSIBLE FACTS
+# This makes it easier to read the ansible tasks
+# -----------------------------------------------------------------------------
+
+- name: Set MariaDB facts for the role
+  ansible.builtin.set_fact:
+    mariadb_user: "{{ databases_mariadb.user }}"
+    mariadb_group: "{{ databases_mariadb.group }}"
+    mariadb_home_dir: "/opt/{{ databases_mariadb.user }}"
+    mariadb_config_dir: "/etc/{{ databases_mariadb.user }}"
+    mariadb_config_file: "/etc/{{ databases_mariadb.user }}/{{ databases_mariadb.user }}.conf"
+    mariadb_data_dir: "/data/{{ databases_mariadb.user }}"
+    mariadb_systemd_name: "{{ databases_mariadb.user }}"
+    mariadb_download_url: "https://downloads.mariadb.org/f/mariadb-{{ databases_mariadb.release }}/source/mariadb-{{ databases_mariadb.release }}.tar.gz"
+    mariadb_binary_path: "/usr/local/bin/mysqld"
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+    - uninstall
+
+- name: Display MariaDB variables for debugging
+  ansible.builtin.debug:
+    var: databases_mariadb
+  tags:
+    - debug
+
+- name: Display MariaDB facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> mariadb_user: {{ mariadb_user }}"
+      - "Fact -> mariadb_group: {{ mariadb_group }}"
+      - "Fact -> mariadb_home_dir: {{ mariadb_home_dir }}"
+      - "Fact -> mariadb_config_dir: {{ mariadb_config_dir }}"
+      - "Fact -> mariadb_config_file: {{ mariadb_config_file }}"
+      - "Fact -> mariadb_data_dir: {{ mariadb_data_dir }}"
+      - "Fact -> mariadb_systemd_name: {{ mariadb_systemd_name }}"
+      - "Fact -> mariadb_download_url: {{ mariadb_download_url }}"
+      - "Fact -> mariadb_binary_path: {{ mariadb_binary_path }}"
+  tags:
+    - debug
+
+# 00b. UNINSTALL CONFIRMATION
+- name: Confirm MariaDB uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: MariaDB Uninstallation Confirmation ⚠️
+      
+      You are about to completely uninstall the MariaDB service from this system.
+      
+      This will remove:
+      🗑️  Service binary: /usr/local/bin/mysqld
+      🗑️  Systemd service: {{ mariadb_systemd_name }}.service
+      🗑️  Configuration files: {{ mariadb_config_dir }}/
+      🗑️  User account: {{ mariadb_user }}
+      🗑️  UFW firewall rules: MariaDB profile
+      
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Aborted MariaDB uninstallation 
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+      
+      The MariaDB service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+# 01. SHUTDOWN MARIADB SERVICES
+# This section ensures that the service is stopped before config any changes and 
+# updates are applied to prevent conflict issues.
+# -----------------------------------------------------------------------------
+
+- name: Check if MariaDB service exists
+  ansible.builtin.stat:
+    path: "/lib/systemd/system/{{ mariadb_systemd_name }}.service"
+  register: mariadb_service_file
+  tags:
+    - install
+    - config
+
+- name: Ensure MariaDB service is stopped before modifying
+  ansible.builtin.systemd:
+    name: "{{ mariadb_systemd_name }}"
+    state: stopped
+  become: true
+  failed_when: false
+  when: mariadb_service_file.stat.exists
+  tags:
+    - install
+    - config
+
+- name: Stop and disable MariaDB service for uninstallation
+  ansible.builtin.systemd:
+    name: "{{ mariadb_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+# 02. SET UP MARIADB USER & CREATE SERVICE DIRECTORIES
+# This section sets up the system user and group to run the service and create 
+# all the directories for the service
+# -----------------------------------------------------------------------------
+
+- name: Ensure MariaDB group exists
+  ansible.builtin.group:
+    name: "{{ mariadb_user }}"
+    state: present
+  become: true
+  tags:
+    - install
+
+- name: Create MariaDB system user
+  ansible.builtin.user:
+    name: "{{ mariadb_user }}"
+    group: "{{ mariadb_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: true
+    home: "{{ mariadb_home_dir }}"
+    comment: "MariaDB Server System Account"
+  become: true
+  tags:
+    - install
+
+- name: Create directories for MariaDB service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ mariadb_user }}"
+    group: "{{ mariadb_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ mariadb_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ mariadb_data_dir }}",   mode: "u=rwx,g=r,o="  }
+    - { path: "{{ mariadb_run_dir}}",     mode: "u=rwx,g=r,o="  }
+  become: true
+  tags:
+    - install
+
+# 03. DOWNLOAD, COMPILE, INSTALL & VERIFY MARIADB
+- name: Install MariaDB build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - cmake
+      - libncurses5-dev
+      - libssl-dev
+      - libboost-all-dev
+      - libaio-dev
+      - libjemalloc-dev
+      - bison
+      - zlib1g-dev
+      - libreadline-dev
+      - libcurl4-openssl-dev
+      - libarchive-dev
+      - pkg-config
+      - wget
+    state: present
+    update_cache: true
+  become: true
+  tags:
+    - install
+
+- name: Download MariaDB source release {{ databases_mariadb.release }}
+  ansible.builtin.get_url:
+    url: "{{ mariadb_download_url }}"
+    dest: "/tmp/mariadb.tar.gz"
+    mode: '0644'
+    timeout: 60
+  become: true
+  retries: 3
+  delay: 5
+  register: mariadb_download_result
+  until: mariadb_download_result is succeeded
+  tags:
+    - install
+
+- name: Ensure MariaDB tmp directory exists before extract
+  ansible.builtin.file:
+    path: "/tmp/mariadb"
+    state: directory
+    owner: "{{ mariadb_user }}"
+    group: "{{ mariadb_user }}"
+    mode: '0755'
+  become: true
+  tags:
+    - install
+
+- name: Extract MariaDB to tmp destination directory
+  ansible.builtin.unarchive:
+    src: "/tmp/mariadb.tar.gz"
+    dest: "/tmp/mariadb"
+    remote_src: true
+    owner: "{{ mariadb_user }}"
+    group: "{{ mariadb_user }}"
+    extra_opts: ["--strip-components=1"]
+  become: true
+  tags:
+    - install
+
+- name: Configure MariaDB build
+  ansible.builtin.command:
+    cmd: >
+      cmake . -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DMYSQL_DATADIR={{ mariadb_data_dir }} \
+      -DSYSCONFDIR={{ mariadb_config_dir }}
+    chdir: "/tmp/mariadb-{{ databases_mariadb.release }}"
+  become: true
+  become_user: "{{ mariadb_user }}"
+  tags:
+    - install
+  changed_when: true
+
+- name: Build MariaDB
+  ansible.builtin.command:
+    cmd: "make -j2"
+    chdir: "/tmp/mariadb-{{ databases_mariadb.release }}"
+  become: true
+  become_user: "{{ mariadb_user }}"
+  tags:
+    - install
+  changed_when: true
+
+- name: Install MariaDB binary using make
+  ansible.builtin.command:
+    cmd: "make install"
+    chdir: "/tmp/mariadb-{{ databases_mariadb.release }}"
+  become: true
+  tags:
+    - install
+
+- name: Verify MariaDB binary is installed and has correct permissions
+  ansible.builtin.stat:
+    path: "/usr/local/bin/mysqld"
+  register: mariadb_binary_stat
+  tags:
+    - install
+
+- name: Assert MariaDB binary is present, executable, and owned by correct user
+  ansible.builtin.assert:
+    that:
+      - mariadb_binary_stat.stat.exists
+      - mariadb_binary_stat.stat.mode is search('^..x')
+      - mariadb_binary_stat.stat.pw_name == mariadb_user
+      - mariadb_binary_stat.stat.gr_name == mariadb_user
+    fail_msg: "MariaDB binary is missing, not executable, or has incorrect ownership."
+    success_msg: "MariaDB binary is present, executable, and has correct ownership."
+  tags:
+    - install
+
+- name: Clean up MariaDB source directory
+  ansible.builtin.file:
+    path: "/tmp/mariadb-{{ databases_mariadb.release }}"
+    state: absent
+  become: true
+  tags:
+    - install
+
+- name: Clean up downloaded tarball
+  ansible.builtin.file:
+    path: "/tmp/mariadb.tar.gz"
+    state: absent
+  become: true
+  tags:
+    - install
+
+# 04. SETUP CONFIG FILE FOR MARIADB
+- name: Deploy MariaDB configuration file
+  ansible.builtin.template:
+    src: templates/mariadb.cnf.j2
+    dest: "{{ mariadb_config_dir }}/{{ mariadb_user }}.conf"
+    owner: "{{ mariadb_user }}"
+    group: "{{ mariadb_user }}"
+    mode: '0600'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Check MariaDB configuration file syntax
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/mysqld --no-defaults --defaults-file={{ mariadb_config_dir }}/{{ mariadb_user }}.conf --verbose --help"
+  register: mariadb_config_check
+  changed_when: false
+  failed_when: mariadb_config_check.rc != 0
+  become: true
+  tags:
+    - install
+    - config
+    - verify
+
+# 05. SETUP SYSTEMD FOR MARIADB
+- name: Deploy systemd unit for MariaDB
+  ansible.builtin.template:
+    src: templates/mariadb-systemd.service.j2
+    dest: "/lib/systemd/system/{{ mariadb_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify MariaDB systemd service config is valid
+  ansible.builtin.command: "systemd-analyze verify /lib/systemd/system/{{ mariadb_systemd_name }}.service"
+  register: mariadb_systemd_verify
+  changed_when: false
+  failed_when: mariadb_systemd_verify.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+
+- name: Reload systemd and start MariaDB service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ mariadb_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify MariaDB service is active
+  ansible.builtin.systemd:
+    name: "{{ mariadb_systemd_name }}"
+  register: mariadb_service_status
+  changed_when: false
+  tags:
+    - verify
+    - healthcheck
+
+- name: Assert mariadb service is running
+  ansible.builtin.assert:
+    that:
+      - mariadb_service_status.status.ActiveState == "active"
+    fail_msg: "MariaDB service is NOT active."
+    success_msg: "MariaDB service is active."
+  tags:
+    - verify
+    - healthcheck
+
+# 06. SETUP FIREWALL FOR MARIADB
+- name: Deploy MariaDB UFW application profile
+  ansible.builtin.template:
+    src: templates/mariadb-ufw-profile.j2
+    dest: "/etc/ufw/applications.d/{{ mariadb_systemd_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Reload UFW MariaDB application profiles
+  ansible.builtin.command: "ufw app update {{ mariadb_systemd_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags:
+    - install
+    - config
+
+- name: Allow MariaDB through UFW using application profile
+  ansible.builtin.ufw:
+    rule: allow
+    name: "MariaDB"
+    comment: "Allow MariaDB (3306) from LOCAL NET"
+    src: "{{ item }}"
+  loop: "{{ local_networks | default(['127.0.0.1']) }}"
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Confirm MariaDB UFW profile is allowed for local networks
+  ansible.builtin.command: "ufw status numbered"
+  register: mariadb_ufw_status
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert MariaDB UFW rule exists for each local network
+  ansible.builtin.assert:
+    that:
+      - "'MariaDB' in mariadb_ufw_status.stdout and item in mariadb_ufw_status.stdout"
+    fail_msg: "MariaDB UFW rule is NOT present for {{ item }}"
+    success_msg: "MariaDB UFW rule is present for {{ item }}"
+  loop: "{{ local_networks | default(['127.0.0.1']) }}"
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Remove UFW rules for MariaDB application profile
+  ansible.builtin.ufw:
+    rule: deny
+    name: "MariaDB"
+    delete: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove MariaDB UFW application profile
+  ansible.builtin.file:
+    path: "/etc/ufw/applications.d/{{ mariadb_systemd_name }}"
+    state: absent
+  become: true
+  tags:
+    - uninstall
+    - never
+
+# 07. HEALTH CHECKS FOR MARIADB
+- name: Wait for MariaDB to be available
+  ansible.builtin.wait_for:
+    port: 3306
+    host: 127.0.0.1
+    timeout: 30
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Test MariaDB connection
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/mysqladmin --defaults-file={{ mariadb_config_dir }}/{{ mariadb_user }}.conf ping"
+  become: true
+  become_user: "{{ mariadb_user }}"
+  register: mariadb_connection_test
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert MariaDB connection successful
+  ansible.builtin.assert:
+    that:
+      - mariadb_connection_test.rc == 0
+      - "'mysqld is alive' in mariadb_connection_test.stdout"
+    fail_msg: "MariaDB connection test failed!"
+    success_msg: "MariaDB connection test successful."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+# 08. UNINSTALL MARIADB
+- name: Stop and disable MariaDB service for uninstallation
+  ansible.builtin.systemd:
+    name: "{{ mariadb_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove MariaDB user
+  ansible.builtin.user:
+    name: "{{ mariadb_user }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove MariaDB directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ mariadb_config_dir }}"
+    - "{{ mariadb_data_dir }}"
+    - "{{ mariadb_run_dir }}"
+  become: true
+  tags:
+    - uninstall
+    - never
+
+- name: Delete systemd service for MariaDB
+  ansible.builtin.file:
+    path: "/lib/systemd/system/{{ mariadb_systemd_name }}.service"
+    state: absent
+  become: true
+  tags:
+    - uninstall
+    - never
+
+- name: Reload systemd after removing MariaDB service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  tags:
+    - uninstall
+    - never

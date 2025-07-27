@@ -1,0 +1,63 @@
+
+
+# ==============================================================================
+# Valkey Exporter UFW Application Profile
+# ==============================================================================
+#
+# ⚠️ WARNING: This file is managed by Ansible! ⚠️
+# 🔄 Any manual changes will be overwritten on the next Ansible run
+# 📝 To make changes, edit the template file and run the playbook
+#
+# This UFW (Uncomplicated Firewall) application profile defines the network
+# ports and protocols used by the Valkey Exporter service for Prometheus
+# metrics collection.
+#
+# Service Overview:
+#   - 📊 Valkey Exporter serves Prometheus metrics on HTTP
+#   - 🌐 Default port: 9121 (configurable)
+#   - 🔗 Protocol: TCP (HTTP)
+#   - 🛡️ Access: Should be restricted to monitoring systems only
+#
+# Profile Information:
+#   - Application: Valkey Exporter
+#   - Port: {{ databases_valkey.exporter.port | default('9121') }}/tcp
+#   - Protocol: HTTP (Prometheus metrics endpoint)
+#   - Access: Local network monitoring systems
+#
+# Security Considerations:
+#   🔒 Metrics endpoint should only be accessible from trusted networks
+#   🛡️ Contains system and database performance information
+#   📊 No authentication - rely on network-level access control
+#   🚫 Should not be exposed to public internet
+#
+# Usage Examples:
+#   sudo ufw allow Valkey-Exporter                    # Allow from anywhere (NOT recommended)
+#   sudo ufw allow from 192.168.1.0/24 to any app Valkey-Exporter  # Allow from local network
+#   sudo ufw allow from 10.0.0.100 to any app Valkey-Exporter      # Allow from specific IP
+#
+# Common Commands:
+#   sudo ufw app list                                 # List available applications
+#   sudo ufw app info Valkey-Exporter                 # Show application details
+#   sudo ufw status                                   # Show current firewall rules
+#   sudo ufw delete allow Valkey-Exporter            # Remove rule
+#
+# Network Architecture:
+#   [Valkey/Redis] ← [Valkey Exporter:9121] ← [Prometheus] ← [Grafana/AlertManager]
+#                              ↑
+#                        This profile secures
+#                        this connection point
+#
+# References:
+#   - UFW Documentation: https://help.ubuntu.com/community/UFW
+#   - Valkey Exporter: https://github.com/oliver006/redis_exporter
+#   - Prometheus: https://prometheus.io/docs/
+#
+# Managed by: Ansible
+# Template: roles/debian/templates/valkey-exporter-ufw-profile.j2
+# Last Updated: 2025-07-14
+# ==============================================================================
+
+[Valkey Exporter]
+title=Valkey Exporter
+description=Prometheus metrics exporter for Valkey/Redis monitoring
+ports={{ databases_valkey.exporter.port }}/tcp

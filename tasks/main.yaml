@@ -1,0 +1,81 @@
+# ------------------------------------------------------------------------------
+# Databases Role Main Tasks
+# ------------------------------------------------------------------------------
+#
+# Main task file for the Databases role.
+# Detects the operating system and includes appropriate task files.
+#
+# ------------------------------------------------------------------------------
+
+---
+
+- name: Detect operating system
+  ansible.builtin.debug:
+    msg: "Detected OS: {{ ansible_os_family }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"
+  tags:
+    - always
+
+
+
+## Debian family tasks block
+# ------------------------------------------------------------------------------
+- name: Debian family tasks block
+  when: ansible_os_family == "Debian"
+  block:
+    - name: Starting the Debian Block
+      ansible.builtin.debug:
+        msg: "Starting tasks for Debian"
+
+    - name: Install Adminer
+      ansible.builtin.include_tasks: adminer-debian.yaml
+      tags:
+        - adminer
+
+    - name: Install InfluxDB
+      ansible.builtin.include_tasks: influxdb-debian.yaml
+      tags:
+        - influxdb
+
+    - name: Install MariaDB
+      ansible.builtin.include_tasks: mariadb-debian.yaml
+      tags:
+        - mariadb
+
+    - name: Install PostgresSQL
+      ansible.builtin.include_tasks: postgres-debian.yaml
+      tags:
+        - postgres
+
+
+
+
+## RedHat family tasks block
+# ------------------------------------------------------------------------------
+- name: Include RedHat-specific tasks
+  when: ansible_os_family == "RedHat"
+  block:
+    - name: Starting the RedHat Block
+      ansible.builtin.debug:
+        msg: "Starting tasks for RedHat"
+
+
+
+## Linux-specific tasks block
+# ------------------------------------------------------------------------------
+- name: Include Linux-specific tasks
+  when: ansible_system == "Linux" and ansible_os_family not in ["Debian", "RedHat"]
+  block:
+    - name: Starting the Linux Block
+      ansible.builtin.debug:
+        msg: "Starting tasks for Linux"
+
+
+
+## Fail if unsupported operating system
+# ------------------------------------------------------------------------------
+- name: Fail if unsupported operating system
+  ansible.builtin.fail:
+    msg: "Unsupported operating system: {{ ansible_os_family }} ({{ ansible_distribution }})"
+  when: ansible_system != "Linux" and ansible_os_family not in ["Debian", "RedHat"]
+  tags:
+    - <service>

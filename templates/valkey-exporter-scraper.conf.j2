@@ -1,0 +1,58 @@
+# ==============================================================================
+# Valkey Exporter Prometheus Scraper Configuration
+# ==============================================================================
+#
+# ⚠️ WARNING: This file is managed by Ansible! ⚠️
+# 🔄 Any manual changes will be overwritten on the next Ansible run
+# 📝 To make changes, edit the template file and run the playbook
+#
+# This Prometheus scraper configuration defines how Prometheus should collect
+# metrics from the Valkey Exporter service for monitoring Valkey/Redis instances.
+#
+# Service Overview:
+#   - 📊 Collects Valkey/Redis performance and health metrics
+#   - 🔄 Scrapes metrics every 15 seconds (configurable)
+#   - 🌐 Connects to Valkey Exporter HTTP endpoint
+#   - 🏷️ Adds labels for identification and organization
+#
+# Metrics Categories:
+#   - 💾 Memory usage (used_memory, max_memory, fragmentation)
+#   - 🔗 Connection stats (connected_clients, blocked_clients)
+#   - 📊 Command statistics (total_commands_processed, ops_per_sec)
+#   - 💾 Persistence (last_save_time, changes_since_last_save)
+#   - 🔄 Replication (connected_slaves, master_repl_offset)
+#   - 🏃 Performance (instantaneous_ops_per_sec, hit_rate)
+#
+# Labels Applied:
+#   - job: valkey-exporter
+#   - instance: Target address
+#   - service: valkey
+#   - component: exporter
+#
+# Security Considerations:
+#   🔒 Metrics endpoint should only be accessible from Prometheus
+#   📊 Contains database performance information
+#   🛡️ No authentication - rely on network-level access control
+#
+# Usage:
+#   This file is automatically included in the main Prometheus configuration.
+#   Prometheus will discover and scrape the Valkey Exporter endpoint.
+#
+# References:
+#   - Prometheus Configuration: https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+#   - Valkey Exporter: https://github.com/oliver006/redis_exporter
+#   - Valkey: https://databases_valkey.io/
+#
+# Managed by: Ansible
+# Template: roles/debian/templates/valkey-exporter-scraper.conf.j2
+# Last Updated: 2025-07-14
+# ==============================================================================
+
+scrape_configs:
+  - job_name: 'valkey-exporter'
+    static_configs:
+      - targets: ['127.0.0.1:{{ databases_valkey.exporter.port }}']
+        labels:
+          instance: '{{ ansible_fqdn }}'
+          service: 'valkey'
+          component: 'exporter'

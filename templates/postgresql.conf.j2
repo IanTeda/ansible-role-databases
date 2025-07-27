@@ -1,0 +1,54 @@
+# =============================================================================
+# PostgreSQL Database Configuration
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!       ⚠️ 
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+# =============================================================================
+#
+# This file is managed by Ansible - DO NOT EDIT MANUALLY
+# Generated from: roles/debian/templates/postgresql.conf.j2
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# This is a minimal configuration to get PostgreSQL up and running.
+# All settings have sensible defaults and can be customised via host variables.
+#
+# =============================================================================
+
+
+# CONNECTION AND AUTHENTICATION
+# -----------------------------------------------------------------------------
+listen_addresses = '127.0.0.1'
+port = {{ databases_postgres.port }}
+max_connections = '100'
+
+
+# ERROR REPORTING AND LOGGING - Systemd journal integration
+# -----------------------------------------------------------------------------
+log_destination = 'stderr'
+logging_collector = off
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+
+
+# RUNTIME STATISTICS - Basic monitoring
+# -----------------------------------------------------------------------------
+track_activities = on    # Required for pg_stat_activity view and monitoring tools
+track_counts = on        # Required for pg_stat_user_tables and performance monitoring
+
+# AUTOVACUUM - Keep database clean
+# -----------------------------------------------------------------------------
+autovacuum = on          # Automatically removes dead rows and updates statistics to maintain performance
+
+
+# CLIENT CONNECTION DEFAULTS - Australian English locale
+# -----------------------------------------------------------------------------
+timezone = 'Australia/Sydney'
+lc_messages = 'en_AU.UTF-8'     # Error messages in Australian English
+lc_monetary = 'en_AU.UTF-8'     # Currency formatting (AUD)
+lc_numeric = 'en_AU.UTF-8'      # Number formatting (1,000.00)
+lc_time = 'en_AU.UTF-8'         # Date/time formatting (DD/MM/YYYY)
+
+
+# SECURITY - SSL disabled by default for local development
+# -----------------------------------------------------------------------------
+ssl = 'off'
