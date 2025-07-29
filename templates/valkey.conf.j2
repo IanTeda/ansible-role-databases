@@ -15,7 +15,7 @@
 # =============================================================================
 
 # IP address to bind to. By default, Valkey binds to 0.0.0.0
-bind 127.0.0.1
+bind {{ databases_valkey.listen_address }}
 
 # Accept connections on the specified port, default is 6379.
 # If port 0 is specified the server will not listen on a TCP socket.
@@ -26,9 +26,13 @@ port {{ databases_valkey.port }}
 daemonize no
 supervised systemd
 
-# Specify the log file name. Also the empty string can be used to force
-# the server to log on the standard output.
+# We want to log to systemd journal, so set to emtpy string to force the server
+# to log on stadardout
 logfile ""
 
 # The working directory. The DB will be written inside this directory.
 dir {{ valkey_data_dir }}
+
+# Require a password to access the server.
+# This is the admin password for the Valkey server.
+requirepass {{ databases_admin.password }}

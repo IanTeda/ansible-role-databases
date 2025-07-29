@@ -51,10 +51,12 @@
 
 - name: Set Valkey facts for the role
   ansible.builtin.set_fact:
+    valkey_user: "{{ databases_valkey.user }}"
+    valkey_group: "{{ databases_valkey.group }}"
     valkey_home_dir: "/opt/{{ databases_valkey.user }}"
     valkey_config_dir: "/etc/{{ databases_valkey.user }}"
+    valkey_config_file: "/etc/{{ databases_valkey.user }}/{{ databases_valkey.user }}.conf"
     valkey_data_dir: "/data/{{ databases_valkey.user }}"
-    valkey_run_dir: "/run/{{ databases_valkey.user }}"
     valkey_systemd_name: "{{ databases_valkey.user }}"
     valkey_download_url: "https://download.databases_valkey.io/releases/valkey-{{ databases_valkey.release }}-jammy-x86_64.tar.gz"
     valkey_binary_path: "/usr/local/bin/{{ databases_valkey.user }}"
@@ -84,6 +86,43 @@
   tags:
     - debug
 
+- name: Confirm Valkey uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: Valkey Uninstallation Confirmation ⚠️
+      
+      You are about to completely uninstall the Valkey service from this system.
+      
+      This will remove:
+      🗑️  Service binary: {{ valkey_binary_path }}
+      🗑️  Systemd service: {{ valkey_systemd_name }}.service
+      🗑️  Configuration files: {{ valkey_config_dir }}/
+      🗑️  User account: {{ valkey_user }}
+      🗑️  UFW firewall rules: valkey profile
+      🗑️  Prometheus scraper config: /etc/prometheus/conf.d/{{ valkey_systemd_name }}.yml
+
+      ❗ This action will stop metrics collection from your Valkey instance!
+      📊 Historical metrics data in Prometheus will be preserved
+      
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Uninstallation Aborted
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+
+      The Valkey service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+
 
 ## 01. SHUTDOWN VALKEY SERVICES
 # This section ensures that the service is stopped before config any changes and
@@ -109,6 +148,19 @@
     - install
     - config
 
+- name: Stop and disable Valkey service during uninstallation
+  when: uninstall_confirmation.user_input | bool
+  ansible.builtin.systemd:
+    name: "{{ valkey_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+
 
 ## 02. SET UP VALKEY USER & CREATE SERVICE DIRECTORIES
 # This section sets up the system user and group to run the service and create
@@ -120,9 +172,7 @@
     name: "{{ databases_valkey.user }}"
     system: true
     shell: /usr/sbin/nologin
-    # create_home: true
-    # home: "{{ valkey_home_dir }}"
-    comment: "Valkey service system account"
+    comment: "Valkey Service system account"
   become: true
   tags:
     - install
@@ -135,13 +185,24 @@
     group: "{{ databases_valkey.user }}"
     mode: "{{ item.mode }}"
   loop:
-    # - { path: "{{ valkey_home_dir }}",   mode: "u=rwx,g=rw,o="}
     - { path: "{{ valkey_config_dir }}", mode: "u=rwx,g=r,o="}
     - { path: "{{ valkey_data_dir }}",   mode: "u=rwx,g=,o="}
-    - { path: "{{ valkey_run_dir}}",     mode: "u=rwx,g=r,o="}
   become: true
   tags:
     - install
+
+- name: Remove directories for Valkey service during uninstallation
+  when: uninstall_confirmation.user_input | bool
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop:
+    - { path: "{{ valkey_config_dir }}", mode: "u=rwx,g=r,o="}
+    - { path: "{{ valkey_data_dir }}",   mode: "u=rwx,g=,o="}
+  become: true
+  tags:
+    - never 
+    - uninstall
 
 
 
@@ -215,9 +276,9 @@
 - name: Deploy Valkey configuration file to "{{ valkey_config_dir }}/databases_valkey.conf"
   ansible.builtin.template:
     src: "templates/databases_valkey.conf.j2"
-    dest: "{{ valkey_config_dir }}/databases_valkey.conf"
-    owner: "{{ databases_valkey.user }}"
-    group: "{{ databases_valkey.user }}"
+    dest: "{{ valkey_config_file }}"
+    owner: "{{ valkey_user }}"
+    group: "{{ valkey_group }}"
     mode: '0640'
   become: true
   tags:
@@ -262,7 +323,7 @@
 
 - name: Deploy Valkey systemd service unit
   ansible.builtin.template:
-    src: templates/databases_valkey.service.j2
+    src: templates/valkey-systemd.service.j2
     dest: "/lib/systemd/system/{{ valkey_systemd_name }}.service"
     owner: root
     group: root
