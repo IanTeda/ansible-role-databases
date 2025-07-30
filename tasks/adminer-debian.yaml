@@ -102,6 +102,7 @@
     name:
       - nginx
       - php-fpm
+      - php-pgsql
     state: present
     update_cache: yes
   become: true
@@ -170,7 +171,7 @@
 - name: Deploy nginx site config for Adminer
   ansible.builtin.template:
     src: templates/adminer-nginx-location.conf.j2
-    dest: "/etc/nginx/conf.d/{{ ansible_hostname }}-{{ databases_adminer.user }}.conf"
+    dest: "/etc/nginx/conf.d/{{ ansible_hostname }}-{{ databases_adminer.path_prefix }}.conf"
     owner: root
     group: root
     mode: '0644'
@@ -206,7 +207,7 @@
 
 - name: Wait for Adminer to be available
   ansible.builtin.wait_for:
-    host: 127.0.0.1
+    host: "{{ ansible_fqdn }}"
     port: 80
     delay: 3
     timeout: 20
@@ -217,9 +218,10 @@
 
 - name: Check Adminer web interface
   ansible.builtin.uri:
-    url: "http://127.0.0.1/adminer/"
+    url: "https://{{ ansible_fqdn }}/{{ databases_adminer.path_prefix }}/"
     method: GET
     status_code: 200
+    validate_certs: false
   register: adminer_health
   tags:
     - install

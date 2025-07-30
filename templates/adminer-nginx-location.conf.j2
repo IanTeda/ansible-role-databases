@@ -6,29 +6,26 @@
 # Edit the template file or Ansible variables instead.
 #
 # Generated from: roles/debian/templates/adminer-nginx-location.j2
-# Deploy path: "/etc/nginx/conf.d/{{ ansible_hostname }}-adminer.conf"
+# Deploy path: "/etc/nginx/conf.d/{{ ansible_hostname }}-{{ databases_adminer.path_prefix }}.conf"
 # Last updated: {{ ansible_date_time.iso8601 }}
 #
 # =============================================================================
 
 
-location /adminer {
-    alias /var/www/adminer/;
+location /{{ databases_adminer.path_prefix }}/ {
+    root /var/www;
     index index.php;
 
-    location ~ ^/adminer/(.+\.php)$ {
-        alias /var/www/adminer/$1;
+    location ~ ^/{{ databases_adminer.path_prefix }}/(.+\.php)$ {
+        root /var/www;
         fastcgi_pass unix:/run/php/php-fpm.sock;
         fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME /var/www/adminer/$1;
+        fastcgi_param SCRIPT_FILENAME /var/www/{{ databases_adminer.path_prefix }}/$1;
         include fastcgi_params;
-        fastcgi_param PATH_INFO $fastcgi_path_info;
-        fastcgi_param HTTPS $https if_not_empty;
     }
 
     # Deny access to .ht* files
-    location ~ /adminer/\.ht {
+    location ~ /\.ht {
         deny all;
     }
 }
-
