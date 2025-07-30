@@ -46,6 +46,11 @@
       tags:
         - postgres
 
+    - name: Install Valkey
+      ansible.builtin.include_tasks: valkey-debian.yaml
+      tags:
+        - valkey
+
 
 
 

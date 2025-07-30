@@ -42,10 +42,10 @@
 Description=Valkey In-Memory Data Store
 Documentation=https://databases_valkey.io/
 
-# Service Dependencies
-######################
+## Unit Dependencies
+####################
 
-# Requires the network to be up before starting
+# Start this service after the following services have started
 After=network.target
 
 
@@ -66,11 +66,12 @@ TimeoutStopSec=30
 # Directory creation and permissions
 ####################################
 
-# Run as {{ valkey_user }}:{{ valkey_group }}
+# Run as
 User={{ valkey_user }}
 Group={{ valkey_group }}
 
-# Let Systemd manage the run time directory
+# Let Systemd manage the run time directory, all other directories are managed
+# by the Ansible task
 # /run/{{ valkey_user }}
 RuntimeDirectory={{ valkey_user }}
 RuntimeDirectoryMode=0750
@@ -80,7 +81,6 @@ RuntimeDirectoryMode=0750
 ####################
 
 # Send logs to stdout/stderr for systemd to capture
-# Ensure these are NOT redirected to debug.log in your bitcoin.conf or ExecStart command
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier={{ valkey_user }}
@@ -97,5 +97,10 @@ ProtectHome=true
 ReadOnly={{ valkey_config_dir }}
 ReadWritePaths={{ valkey_data_dir }}
 
+
+#  Define how the service is enabled at boot.
 [Install]
+
+# Create a symlink so the service starts automatically at boot as part of the 
+# multi-user.target (the standard runlevel for most servers).
 WantedBy=multi-user.target

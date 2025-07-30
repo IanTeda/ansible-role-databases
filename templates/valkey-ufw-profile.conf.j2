@@ -1,0 +1,32 @@
+
+# =============================================================================
+# Valkey UFW Application Profile - Ansible Managed
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!
+# Any manual changes will be overwritten on the next playbook run.
+# Edit the template file or Ansible variables instead.
+#
+# Template path: roles/databases/templates/valkey-ufw-profile.conf
+# Deploy path: /etc/ufw/applications.d/valkey
+# Last deployed: {{ ansible_date_time.iso8601 }}
+# Host: {{ ansible_fqdn }}
+# =============================================================================
+#
+# This UFW application profile allows traffic to the Valkey (Redis alternative)
+# server port. All settings are templated for automation and best-practice
+# security. Use with UFW to allow or restrict access to Valkey.
+#
+# Usage:
+#   sudo ufw allow from <trusted_ip_or_subnet> to any app Valkey
+#
+# References:
+#   - https://valkey.io/
+#   - https://valkey.io/docs/
+#
+# -----------------------------------------------------------------------------
+
+
+[Valkey]
+title=Valkey In-Memory Data Store
+description=Allow Valkey (Redis alternative) server traffic
+ports={{ databases_valkey.port }}/tcp
