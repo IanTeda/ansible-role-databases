@@ -8,6 +8,7 @@
 - name: Set PostgreSQL facts for the role
   ansible.builtin.set_fact:
     postgres_user: "{{ databases_postgres.user }}"
+    postgres_group: "{{ databases_postgres.group }}"
     postgres_home_dir: "/opt/{{ databases_postgres.user }}"
     postgres_config_dir: "/etc/{{ databases_postgres.user }}"
     postgres_config_file: "/etc/{{ databases_postgres.user }}/{{ databases_postgres.user }}.conf"
@@ -22,7 +23,27 @@
     - healthcheck
     - uninstall
 
-- name: Confirm postgres uninstallation
+- name: Display PostgreSQL variables for debugging
+  ansible.builtin.debug:
+    var: databases_postgres
+  tags:
+    - debug
+
+- name: Display PostgreSQL facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> postgres_user: {{ postgres_user }}"
+      - "Fact -> postgres_group: {{ postgres_group }}"
+      - "Fact -> postgres_home_dir: {{ postgres_home_dir }}"
+      - "Fact -> postgres_config_dir: {{ postgres_config_dir }}"
+      - "Fact -> postgres_config_file: {{ postgres_config_file }}"
+      - "Fact -> postgres_data_dir: {{ postgres_data_dir }}"
+      - "Fact -> postgres_systemd_name: {{ postgres_systemd_name }}"
+      - "Fact -> postgres_download_url: {{ postgres_download_url }}"
+  tags:
+    - debug
+
+- name: Confirm PostgreSQL uninstallation
   ansible.builtin.pause:
     prompt: |
       ⚠️  WARNING: PostgreSQL Uninstallation Confirmation ⚠️
@@ -46,7 +67,7 @@
     - never
     - uninstall
 
-- name: Abort uninstallation - user chose not to proceed
+- name: PostgreSQL uninstall aborted
   ansible.builtin.fail:
     msg: |
       🛑 Uninstallation aborted by user choice
@@ -128,7 +149,7 @@
     path: "{{ item.path }}"
     state: directory
     owner: "{{ postgres_user }}"
-    group: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
     mode: "{{ item.mode }}"
   loop:
     - { path: "{{ postgres_config_dir }}", mode: "u=rwx,g=rw,o=" }
@@ -136,6 +157,7 @@
   become: true
   tags:
     - install
+    - config
 
 - name: Remove directories for PostgreSQL service
   ansible.builtin.file:
@@ -156,7 +178,7 @@
 # into the `/usr/local/bin/`
 # -----------------------------------------------------------------------------
 
-- name: Update apt cache, install PostgreSQL dependencies and clean apt cache
+- name: Update apt cache and install PostgreSQL dependencies
   ansible.builtin.apt:
     name:
       - bison                   # Parser generator for PostgreSQL grammar
@@ -197,7 +219,7 @@
     path: "/tmp/postgresql-{{ databases_postgres.release }}"
     state: directory
     owner: "{{ postgres_user }}"
-    group: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
     mode: '0755'
   become: true
   tags:
@@ -209,7 +231,7 @@
     dest: "/tmp/postgresql-{{ databases_postgres.release }}"
     remote_src: true
     owner: "{{ postgres_user }}"
-    group: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
     extra_opts: ["--strip-components=1"]
   become: true
   tags:
@@ -257,16 +279,6 @@
     path: "/tmp/postgresql-{{ databases_postgres.release }}"
     state: absent
   become: true
-  tags:
-    - install
-
-- name: Initialise PostgreSQL default database
-  ansible.builtin.command:
-    cmd: "/usr/local/bin/initdb -D {{ postgres_data_dir }}"
-  args:
-    creates: "{{ postgres_data_dir }}/PG_VERSION"
-  become: true
-  become_user: "{{ postgres_user }}"
   tags:
     - install
 
@@ -373,7 +385,7 @@
     src: templates/postgresql.conf.j2
     dest: "{{ postgres_config_dir}}/postgresql.conf"
     owner: "{{ postgres_user }}"
-    group: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
     mode: '0600'
   become: true
   tags:
@@ -385,16 +397,39 @@
     src: templates/postgres-hba.conf.j2
     dest: "{{ postgres_config_dir}}/pg_hba.conf"
     owner: "{{ postgres_user }}"
-    group: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
     mode: '0600'
   become: true
   tags:
     - install
     - config
 
+- name: Ensure PostgreSQL data directory has correct permissions
+  ansible.builtin.file:
+    path: /data/postgres
+    owner: "{{ postgres_user }}"
+    group: "{{ postgres_group }}"
+    mode: '0700'
+    state: directory
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Initialise PostgreSQL default database
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/initdb -D {{ postgres_data_dir }}"
+  args:
+    creates: "{{ postgres_data_dir }}/PG_VERSION"
+  become: true
+  become_user: "{{ postgres_user }}"
+  tags:
+    - install
+    - config
+
 - name: Verify PostgreSQL configuration file is valid
   ansible.builtin.command:
-    cmd: "/usr/local/bin/postgres --check -D {{ postgres_data_dir }}"
+    cmd: "/usr/local/bin/postgres --check -D {{ postgres_data_dir }} -c config_file={{ postgres_config_dir }}/postgresql.conf"
   become: true
   become_user: "{{ postgres_user }}"
   register: config_verify

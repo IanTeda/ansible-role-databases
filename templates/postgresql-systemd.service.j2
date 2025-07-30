@@ -70,7 +70,9 @@ Wants=network.target
 # The folder to run the ExecStart command from
 WorkingDirectory={{ postgres_data_dir }}
 
-ExecStart=/usr/local/bin/postgres -D {{ postgres_data_dir }} -c config_file={{ postgres_config_dir }}/postgresql.conf
+ExecStart=/usr/local/bin/postgres -c config_file={{ postgres_config_dir }}/postgresql.conf \
+                                  -D {{ postgres_data_dir }}
+
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Process management

@@ -52,10 +52,12 @@ databases_postgres:
   user: 'postgres'
   group: 'postgres'
   release: '17.5' # <-- https://www.postgresql.org/docs/current/release.html
+  listen_address: '127.0.0.1'
   port: 5432
 
 databases_valkey:
   user: 'valkey'
   group: 'valkey'
   release: '8.1.3' # <-- https://github.com/valkey-io/valkey/releases
+  listen_address: '127.0.0.1'
   port: 6379

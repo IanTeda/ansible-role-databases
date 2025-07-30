@@ -18,7 +18,7 @@
 
 # CONNECTION AND AUTHENTICATION
 # -----------------------------------------------------------------------------
-listen_addresses = '127.0.0.1'
+listen_addresses = '{{ databases_postgres.listen_address }}'
 port = {{ databases_postgres.port }}
 max_connections = '100'
 
