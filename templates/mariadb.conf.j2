@@ -8,7 +8,7 @@
 # =============================================================================
 #
 # Generated from: roles/databases/templates/mariadb.conf.j2
-# Deployed to: /etc/mysql/mariadb.conf.d/{{ mariadb_user }}.conf
+# Deployed to: {{ mariadb_config_file }}
 # Last updated: {{ ansible_date_time.iso8601 }}
 #
 # This is a minimal configuration to get MariaDB up and running.
@@ -20,13 +20,8 @@
 [mysqld]
 user = {{ mariadb_user }}
 datadir = {{ mariadb_data_dir }}
-socket = {{ mariadb_run_dir }}/mysqld.sock
-pid-file = {{ mariadb_run_dir }}/mysqld.pid
-bind-address = 127.0.0.1
+socket = /run/{{ mariadb_systemd_name }}/{{ mariadb_systemd_name }}.sock
+bind-address = {{ databases_mariadb.listen_address }}
 port = {{ databases_mariadb.port }}
-log-error = {{ mariadb_data_dir }}/mariadb.log
+log_error = syslog
 
-
-[client]
-user = root
-socket = {{ mariadb_run_dir }}/mysqld.sock

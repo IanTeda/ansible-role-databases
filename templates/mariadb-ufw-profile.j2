@@ -1,0 +1,35 @@
+# =============================================================================
+# MariaDB UFW Application Profile
+# =============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY! ⚠️
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+# =============================================================================
+#
+# Generated from: roles/databases/templates/mariadb-ufw-profile.j2
+# Deployed to: /etc/ufw/applications.d/{{ mariadb_systemd_name }}
+# Last updated: {{ ansible_date_time.iso8601 }}
+#
+# This is a minimal UFW application profile for MariaDB.
+# All settings have sensible defaults in mariadb/defaults/main.yaml and can be
+# customized/overwritten via host variables.
+# =============================================================================
+# ====================================================================================================
+# UFW Application Profile: MariaDB
+# ----------------------------------------------------------------------------------------------------
+# Purpose: Allow MariaDB/MySQL server traffic through UFW firewall.
+# Managed by: Ansible (do not edit on target systems)
+#
+# Usage:
+# sudo ufw allow 'MariaDB'
+# sudo ufw app info MariaDB
+#
+# References:
+# - https://mariadb.com/kb/en/configuring-mariadb-for-remote-client-access/
+# - https://wiki.ubuntu.com/UncomplicatedFirewall
+# ====================================================================================================
+
+[MariaDB]
+title=MariaDB Database Server
+description=MariaDB (MySQL-compatible) database server. Allows remote clients to connect to the database service.
+ports={{ databases_mariadb.port }}/tcp

@@ -548,7 +548,7 @@
     name: "Valkey"
     comment: "Allow Valkey ({{ databases_valkey.port }}/tcp) from LOCAL NET"
     src: "{{ item }}"
-  loop: "{{ local_networks }}"
+  loop: "{{ networking_networks.local }}"
   become: true
   tags:
     - never

@@ -17,11 +17,12 @@
 
 ---
 
-# Used for ufw rules
-local_networks:
-  - '192.168.1.0/16'
-  - '10.0.0.0/8'
-
+# Network configuration
+networking_networks: 
+  local: "{{ vault_networks_local }}"
+  lan_gateway_ip: '{{ vault_networks_lan_gateway_ip }}'
+  unifi_vpn_client_subnet: '{{ vault_networks_unifi_vpn_client_subnet }}'
+  primary_network_interface: 'eth0'                     # Primary computer network interface
 
 # ----------------------------- [ Databases ] ----------------------------------
 
@@ -39,12 +40,15 @@ databases_influxdb:
   user: 'influxdb'
   group: 'influxdb'
   release: '3.0.3' # <-- https://github.com/influxdata/influxdb/releases
+  listen_address: '127.0.0.1'
+  port: 8086
 
 # MariaDB configuration
 databases_mariadb:
   user: 'mariadb'
   group: 'mariadb'
-  release: '11.8.2' # <-- https://mariadb.org/download
+  release: '12.0.1' # <-- https://github.com/MariaDB/server/releases
+  listen_address: '127.0.0.1'
   port: 3306
 
 # PostgreSQL configuration  
