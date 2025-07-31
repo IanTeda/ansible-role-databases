@@ -28,6 +28,7 @@
     mariadb_systemd_name: "{{ databases_mariadb.user }}"
     mariadb_download_url: "https://archive.mariadb.org/mariadb-{{ databases_mariadb.release }}/source/mariadb-{{ databases_mariadb.release }}.tar.gz"
     mariadb_binary_path: "/usr/local/bin/mysqld"
+    mariadb_socket_path: "/tmp/mariadb.sock"
   tags:
     - install
     - config
@@ -463,27 +464,9 @@
     - verify
     - healthcheck
 
-# - name: Set MariaDB root password
-#   community.mysql.mysql_user:
-#     name: root
-#     host: "{{ item }}"
-#     password: "{{ databases_admin.password }}"
-#     priv: '*.*:ALL,GRANT'
-#     login_unix_socket: /run/{{ mariadb_systemd_name }}/{{ mariadb_systemd_name }}.sock
-#     state: present
-#   loop:
-#     - 'localhost'
-#     - '127.0.0.1'
-#   become: true
-#   become_user: "{{ mariadb_user }}"
-#   tags:
-#     - install
-#     - config
-#     - verify
-
 - name: Wait for MariaDB socket to be available
   ansible.builtin.wait_for:
-    path: /run/mariadb/mariadb.sock
+    path: "{{ mariadb_socket_path }}"
     state: present
     timeout: 15
   become: true
@@ -498,7 +481,7 @@
     password: "{{ databases_admin.password }}"
     host: "{{ item }}"
     priv: "*.*:ALL,GRANT"
-    login_unix_socket: /run/{{ mariadb_systemd_name }}/{{ mariadb_systemd_name }}.sock
+    login_unix_socket: "{{ mariadb_socket_path }}"
     state: present
     column_case_sensitive: false
   loop:
@@ -514,7 +497,7 @@
   community.mysql.mysql_info:
     login_user: "{{ databases_admin.user }}"
     login_password: "{{ databases_admin.password }}"
-    login_unix_socket: /run/{{ mariadb_systemd_name }}/{{ mariadb_systemd_name }}.sock
+    login_unix_socket: "{{ mariadb_socket_path }}"
     filter: users
   register: mariadb_admin_info
   tags:

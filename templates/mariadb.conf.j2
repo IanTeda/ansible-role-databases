@@ -20,7 +20,7 @@
 [mysqld]
 user = {{ mariadb_user }}
 datadir = {{ mariadb_data_dir }}
-socket = /run/{{ mariadb_systemd_name }}/{{ mariadb_systemd_name }}.sock
+socket = {{ mariadb_socket_path }}
 bind-address = {{ databases_mariadb.listen_address }}
 port = {{ databases_mariadb.port }}
 log_error = syslog
