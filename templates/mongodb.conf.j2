@@ -1,0 +1,18 @@
+# ============================================================================
+# MongoDB Configuration File (Ansible managed)
+# Minimal config for initial startup and testing
+# ============================================================================
+
+# Where to store data.
+storage:
+  dbPath: {{ mongodb_data_dir }}
+
+# Where to log.
+systemLog:
+  destination: syslog
+  logAppend: true
+
+# Network interfaces.
+net:
+  bindIp: {{ databases_mongodb.listen_address }}
+  port: {{ databases_mongodb.port }}

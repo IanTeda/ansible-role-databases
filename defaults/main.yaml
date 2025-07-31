@@ -51,6 +51,14 @@ databases_mariadb:
   listen_address: '127.0.0.1'
   port: 3306
 
+# MongoDB configuration
+databases_mongodb:
+  user: 'mongodb'
+  group: 'mongodb'
+  release: '8.0.12' # <-- https://www.mongodb.com/try/download/community
+  listen_address: '127.0.0.1'
+  port: 27017
+
 # PostgreSQL configuration  
 databases_postgres:
   user: 'postgres'

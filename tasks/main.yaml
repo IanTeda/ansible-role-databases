@@ -41,6 +41,11 @@
       tags:
         - mariadb
 
+    - name: Install MongoDB
+      ansible.builtin.include_tasks: mongodb-debian.yaml
+      tags:
+        - mongodb
+
     - name: Install PostgresSQL
       ansible.builtin.include_tasks: postgres-debian.yaml
       tags:

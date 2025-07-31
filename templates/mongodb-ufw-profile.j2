@@ -1,0 +1,12 @@
+# ============================================================================
+# MongoDB UFW Application Profile (Ansible managed)
+# ----------------------------------------------------------------------------
+# This file is managed by Ansible. Manual changes will be overwritten!
+# Template: roles/databases/templates/mongodb-ufw-profile.j2
+# Deploy: /etc/ufw/applications.d/{{ mongodb_systemd_name }}
+# ============================================================================
+
+[MongoDB]
+title=MongoDB Database
+description=Open source document database for high-performance, high availability, and easy scalability.
+ports={{ databases_mongodb.port }}/tcp

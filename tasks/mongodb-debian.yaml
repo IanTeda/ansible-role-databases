@@ -1,0 +1,508 @@
+# ============================================================================
+# Ansible Task File: mongodb-debian.yaml
+# ----------------------------------------------------------------------------
+# This file is managed by Ansible. Manual changes may be overwritten!
+#
+# Purpose: Complete automation of MongoDB (custom-compiled) installation,
+# configuration, service management, user setup, firewall, and health checks
+# for Debian-based systems.
+#
+# Managed by: roles/databases/tasks/mongodb-debian.yaml
+# Project: ansible_playbook
+# Maintainer: IanTeda
+# ============================================================================
+
+## 00. SET MONGODB ANSIBLE FACTS
+# -----------------------------------------------------------------------------
+- name: Set MongoDB facts for the role
+  ansible.builtin.set_fact:
+    mongodb_user: "{{ databases_mongodb.user }}"
+    mongodb_group: "{{ databases_mongodb.group }}"
+    mongodb_home_dir: "/opt/{{ databases_mongodb.user }}"
+    mongodb_config_dir: "/etc/{{ databases_mongodb.user }}"
+    mongodb_config_file: "/etc/{{ databases_mongodb.user }}/{{ databases_mongodb.user }}.conf"
+    mongodb_data_dir: "/data/{{ databases_mongodb.user }}"
+    mongodb_systemd_name: "{{ databases_mongodb.user }}"
+    # https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-debian12-8.0.12.tgz
+    mongodb_download_url: "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-debian12-{{ databases_mongodb.release }}.tgz"
+    mongodb_binary_path: "/usr/local/bin/mongod"
+    mongodb_socket_path: "/tmp/mongodb.sock"
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+    - uninstall
+
+- name: Display MongoDB variables for debugging
+  ansible.builtin.debug:
+    var: databases_mongodb
+  tags:
+    - debug
+
+- name: Display MongoDB facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Fact -> mongodb_user: {{ mongodb_user }}"
+      - "Fact -> mongodb_group: {{ mongodb_group }}"
+      - "Fact -> mongodb_home_dir: {{ mongodb_home_dir }}"
+      - "Fact -> mongodb_config_dir: {{ mongodb_config_dir }}"
+      - "Fact -> mongodb_config_file: {{ mongodb_config_file }}"
+      - "Fact -> mongodb_data_dir: {{ mongodb_data_dir }}"
+      - "Fact -> mongodb_systemd_name: {{ mongodb_systemd_name }}"
+      - "Fact -> mongodb_download_url: {{ mongodb_download_url }}"
+      - "Fact -> mongodb_binary_path: {{ mongodb_binary_path }}"
+      - "Fact -> mongodb_socket_path: {{ mongodb_socket_path }}"
+  tags:
+    - debug
+
+- name: Confirm MongoDB uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: MongoDB Uninstallation Confirmation ⚠️
+      
+      You are about to completely uninstall the MongoDB service from this system.
+      
+      This will remove:
+      🗑️  Service binary: /usr/local/bin/mongod
+      🗑️  Systemd service: {{ mongodb_systemd_name }}.service
+      🗑️  Configuration files: {{ mongodb_config_dir }}/
+      🗑️  User account: {{ mongodb_user }}
+      🗑️  UFW firewall rules: MongoDB profile
+      
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags:
+    - never
+    - uninstall
+
+- name: Aborted MongoDB uninstallation
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+      
+      The MongoDB service remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags:
+    - never
+    - uninstall
+
+## 01. SHUTDOWN MONGODB SERVICES
+# -----------------------------------------------------------------------------
+- name: Check if MongoDB service exists
+  ansible.builtin.stat:
+    path: "/lib/systemd/system/{{ mongodb_systemd_name }}.service"
+  register: mongodb_service_file
+  tags:
+    - install
+    - config
+
+- name: Ensure MongoDB service is stopped before modifying
+  ansible.builtin.systemd:
+    name: "{{ mongodb_systemd_name }}"
+    state: stopped
+  become: true
+  failed_when: false
+  when: mongodb_service_file.stat.exists
+  tags:
+    - install
+    - config
+
+- name: Stop and disable MongoDB service for uninstallation
+  when: uninstall_confirmation | bool
+  ansible.builtin.systemd:
+    name: "{{ mongodb_systemd_name }}"
+    state: stopped
+    enabled: no
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+## 02. SET UP MONGODB USER & CREATE SERVICE DIRECTORIES
+# -----------------------------------------------------------------------------
+- name: Ensure MongoDB group exists
+  ansible.builtin.group:
+    name: "{{ mongodb_group }}"
+    state: present
+  become: true
+  tags:
+    - install
+
+- name: Create MongoDB system user
+  ansible.builtin.user:
+    name: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    comment: "MongoDB Server System Account"
+  become: true
+  tags:
+    - install
+
+- name: Delete MongoDB system user on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.user:
+    name: "{{ mongodb_user }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Delete MongoDB system group on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.group:
+    name: "{{ mongodb_group }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Create directories for MongoDB service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ mongodb_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ mongodb_data_dir }}",   mode: "u=rwx,g=r,o="  }
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Remove MongoDB directories on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop:
+    - { path: "{{ mongodb_config_dir }}" }
+    - { path: "{{ mongodb_data_dir }}" }
+  become: true
+  tags:
+    - uninstall
+
+
+
+
+## 03. DOWNLOAD, INSTALL & VERIFY MONGODB (PREBUILT BINARY)
+# -----------------------------------------------------------------------------
+- name: Download MongoDB prebuilt binary {{ databases_mongodb.release }}
+  ansible.builtin.get_url:
+    url: "{{ mongodb_download_url }}"
+    dest: "/tmp/mongodb-{{ databases_mongodb.release }}.tgz"
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0644'
+    timeout: 60
+  become: true
+  retries: 3
+  delay: 5
+  register: mongodb_download_result
+  until: mongodb_download_result is succeeded
+  tags:
+    - install
+    - build
+
+- name: Ensure MongoDB tmp directory exists before extract
+  ansible.builtin.file:
+    path: "/tmp/mongodb-{{ databases_mongodb.release }}"
+    state: directory
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0755'
+  become: true
+  tags:
+    - install
+    - build
+
+- name: Extract MongoDB prebuilt binary to tmp directory
+  ansible.builtin.unarchive:
+    src: "/tmp/mongodb-{{ databases_mongodb.release }}.tgz"
+    dest: "/tmp/mongodb-{{ databases_mongodb.release }}"
+    remote_src: true
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+  become: true
+  tags:
+    - install
+    - build
+
+- name: Copy MongoDB binaries to /usr/local/bin
+  ansible.builtin.copy:
+    src: "/tmp/mongodb-{{ databases_mongodb.release }}/bin/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: '0755'
+    remote_src: true
+  become: true
+  loop:
+    - mongod
+    - mongos
+  tags:
+    - install
+    - build
+
+- name: Verify MongoDB binary is installed and has correct permissions
+  ansible.builtin.stat:
+    path: "/usr/local/bin/mongod"
+  register: mongodb_binary_stat
+  become: true
+  tags:
+    - install
+    - build
+    - verify
+    - healthcheck
+
+- name: Assert MongoDB binary is present, executable, and owned by correct user
+  ansible.builtin.assert:
+    that:
+      - mongodb_binary_stat.stat.exists
+      - mongodb_binary_stat.stat.executable
+      - mongodb_binary_stat.stat.pw_name == 'root'
+      - mongodb_binary_stat.stat.gr_name == 'root'
+    fail_msg: "MongoDB binary is missing, not executable, or has incorrect ownership."
+    success_msg: "MongoDB binary is present, executable, and has correct ownership."
+  become: true
+  tags:
+    - install
+    - build
+    - verify
+    - healthcheck
+
+- name: Clean up MongoDB tmp directory
+  ansible.builtin.file:
+    path: "/tmp/mongodb-{{ databases_mongodb.release }}"
+    state: absent
+  become: true
+  tags:
+    - install
+    - build
+    - cleanup
+
+- name: Clean up downloaded tarball
+  ansible.builtin.file:
+    path: "/tmp/mongodb-{{ databases_mongodb.release }}.tgz"
+    state: absent
+  become: true
+  tags:
+    - install
+    - build
+    - cleanup
+
+
+## 04. SETUP CONFIG FILE FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy MongoDB configuration file
+  ansible.builtin.template:
+    src: templates/mongodb.conf.j2
+    dest: "{{ mongodb_config_file }}"
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0600'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Check MongoDB configuration file syntax
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/mongod --config {{ mongodb_config_file }} --sysinfo"
+  register: mongodb_config_check
+  changed_when: false
+  failed_when: mongodb_config_check.rc != 0
+  become: true
+  become_user: "{{ mongodb_user }}"
+  tags:
+    - install
+    - config
+    - verify
+
+## 05. SETUP SYSTEMD FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy systemd unit for MongoDB
+  ansible.builtin.template:
+    src: templates/mongodb-systemd.service.j2
+    dest: "/lib/systemd/system/{{ mongodb_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify MongoDB systemd service config is valid
+  ansible.builtin.command: "systemd-analyze verify /lib/systemd/system/{{ mongodb_systemd_name }}.service"
+  register: mongodb_systemd_verify
+  changed_when: false
+  failed_when: mongodb_systemd_verify.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+
+- name: Reload systemd and start MongoDB service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ mongodb_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify MongoDB service is active
+  ansible.builtin.systemd:
+    name: "{{ mongodb_systemd_name }}"
+  register: mongodb_service_status
+  changed_when: false
+  tags:
+    - verify
+    - healthcheck
+
+- name: Assert MongoDB service is running
+  ansible.builtin.assert:
+    that:
+      - mongodb_service_status.status.ActiveState == "active"
+    fail_msg: "MongoDB service is NOT active."
+    success_msg: "MongoDB service is active."
+  tags:
+    - verify
+    - healthcheck
+
+
+
+## 06. SETUP FIREWALL FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy MongoDB UFW application profile
+  ansible.builtin.template:
+    src: templates/mongodb-ufw-profile.j2
+    dest: "/etc/ufw/applications.d/{{ mongodb_systemd_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Reload UFW MongoDB application profiles
+  ansible.builtin.command: "ufw app update {{ mongodb_systemd_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags:
+    - install
+    - config
+
+- name: Allow MongoDB through UFW using application profile
+  ansible.builtin.ufw:
+    rule: allow
+    name: "MongoDB"
+    comment: "Allow MongoDB ({{ databases_mongodb.port }}/tcp) from LOCAL NET"
+    src: "{{ item }}"
+  loop: "{{ networking_networks.local }}"
+  become: true
+  tags:
+    - never
+    - firewall
+
+- name: Confirm MongoDB UFW profile is allowed for local networks
+  ansible.builtin.command: "ufw status numbered"
+  register: mongodb_ufw_status
+  changed_when: false
+  tags:
+    - never
+    - firewall
+
+- name: Assert MongoDB UFW rule exists for each local network
+  ansible.builtin.assert:
+    that:
+      - "'MongoDB' in mongodb_ufw_status.stdout and item in mongodb_ufw_status.stdout"
+    fail_msg: "MongoDB UFW rule is NOT present for {{ item }}"
+    success_msg: "MongoDB UFW rule is present for {{ item }}"
+  loop: "{{ networking_networks.local }}"
+  tags:
+    - never
+    - firewall
+
+- name: Remove UFW rules for MongoDB application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.ufw:
+    rule: deny
+    name: "MongoDB"
+    delete: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove MongoDB UFW application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.file:
+    path: "/etc/ufw/applications.d/{{ mongodb_systemd_name }}"
+    state: absent
+  become: true
+  tags:
+    - uninstall
+    - never
+
+## 07. HEALTH CHECKS FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Wait for MongoDB to be available
+  ansible.builtin.wait_for:
+    port: "{{ databases_mongodb.port }}"
+    host: "{{ databases_mongodb.listen_address }}"
+    timeout: 30
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check MongoDB process is running
+  ansible.builtin.shell: "pgrep mongod"
+  register: mongod_process_check
+  changed_when: false
+  failed_when: mongod_process_check.rc != 0
+  tags:
+    - healthcheck
+
+- name: Check MongoDB responds to ping
+  ansible.builtin.command: "/usr/local/bin/mongo --eval 'db.runCommand({ ping: 1 })' --quiet"
+  register: mongodb_ping_check
+  changed_when: false
+  failed_when: "'ok' not in mongodb_ping_check.stdout"
+  tags:
+    - healthcheck
+
+- name: Check MongoDB version
+  ansible.builtin.command: "/usr/local/bin/mongod --version"
+  register: mongodb_version_check
+  changed_when: false
+  tags:
+    - healthcheck
+
+- name: Show MongoDB version
+  ansible.builtin.debug:
+    var: mongodb_version_check.stdout
+  tags:
+    - healthcheck
