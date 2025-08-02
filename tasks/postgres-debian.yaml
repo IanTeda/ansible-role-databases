@@ -1,5 +1,38 @@
----
-# Install PostgreSQL on Debian following 00-service-template structure
+
+# ============================================================================
+# PostgreSQL Installation & Management Tasks (Debian)
+# ============================================================================
+# ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY! ⚠️
+# Any manual changes will be overwritten on the next Ansible run.
+# Edit the template file or Ansible variables instead.
+# -----------------------------------------------------------------------------
+# File: roles/databases/tasks/postgres-debian.yaml
+# Purpose: Automated, idempotent installation, configuration, and management of
+#          PostgreSQL on Debian-based systems, following the 00-service-template
+#          structure and best practices for production.
+#
+# Features:
+#   - Installs PostgreSQL from source with custom versioning
+#   - Configures system user, directories, and permissions
+#   - Deploys secure configuration and HBA files
+#   - Sets up systemd service for PostgreSQL
+#   - Manages firewall rules (UFW)
+#   - Adds admin user and runs healthchecks
+#   - Supports robust uninstall and cleanup
+#
+# Usage:
+#   - Include this task file in your playbook or role
+#   - Set required variables in group_vars/host_vars or role defaults
+#   - Run with: ansible-playbook ...
+#
+# TODO: Local unix socket does not appear to be working
+#
+# References:
+#   - https://www.postgresql.org/docs/
+#   - https://www.postgresql.org/download/linux/debian/
+#   - https://www.postgresql.org/docs/current/auth-pg-hba-conf.html
+#   - https://www.postgresql.org/docs/current/runtime-config-connection.html
+# ============================================================================
 
 ## 00. SET POSTGRES ANSIBLE FACTS
 # This makes it easier to read the ansible tasks
