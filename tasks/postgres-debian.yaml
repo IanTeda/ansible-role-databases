@@ -16,6 +16,8 @@
     postgres_systemd_name: "{{ databases_postgres.user }}"
     postgres_download_url: "https://ftp.postgresql.org/pub/source/v{{ databases_postgres.release }}/postgresql-{{ databases_postgres.release }}.tar.gz"
     postgres_installed_version: ""
+    postgres_port: "{{ databases_postgres.port }}"
+    postgres_listen_address: "{{ databases_postgres.listen_address }}"
   tags:
     - install
     - config
@@ -540,7 +542,7 @@
   ansible.builtin.ufw:
     rule: allow
     name: "PostgreSQL"
-    comment: "Allow PostgreSQL ({{ postgres.port | default('5432') }}) from LOCAL NET"
+    comment: "Allow PostgreSQL ({{ postgres_port }}) from LOCAL NET"
     src: "{{ item }}"
   loop: "{{ local_networks }}"
   become: true
@@ -593,9 +595,21 @@
 # This section adds an admin user for creating databases and users for other services
 # ------------------------------------------------------------------------------
 
+- name: Wait for PostgreSQL to be available
+  ansible.builtin.wait_for:
+    port: "{{ postgres_port }}"
+    host: "{{ postgres_listen_address }}"
+    timeout: 30
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
 - name: Add PostgreSQL admin user with CREATEDB, CREATEROLE, LOGIN via psql
   ansible.builtin.command: >
-    psql -h 127.0.0.1
+    psql -h {{ postgres_listen_address }}
+         -p {{ postgres_port }}
          -U postgres
          -d postgres
          -c "DO $$
@@ -606,7 +620,7 @@
                END
              $$;"
   become: true
-  become_user: "{{ databases_postgres.user }}"
+  become_user: "{{ postgres_user }}"
   tags:
     - install
     - config
@@ -619,8 +633,8 @@
 
 - name: Wait for PostgreSQL to be available
   ansible.builtin.wait_for:
-    port: "{{ databases_postgres.port }}"
-    host: 127.0.0.1
+    port: "{{ postgres_port }}"
+    host: "{{ postgres_listen_address }}"
     timeout: 30
   tags:
     - install
@@ -653,7 +667,7 @@
 
 - name: Test PostgreSQL connection
   ansible.builtin.command:
-    cmd: "/usr/local/bin/psql -h 127.0.0.1 -p {{ databases_postgres.port }} -U {{ postgres_user }} -d postgres -c 'SELECT version();'"
+    cmd: "/usr/local/bin/psql -h {{ postgres_listen_address }} -p {{ postgres_port }} -U {{ postgres_user }} -d postgres -c 'SELECT version();'"
   become: true
   become_user: "{{ postgres_user }}"
   register: postgres_connection_test

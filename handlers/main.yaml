@@ -40,6 +40,14 @@
     daemon_reload: true
   become: true
 
+- name: MongoDB Restart
+  ansible.builtin.systemd:
+    name: "{{ databases_mongodb.user }}"
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  become: true
+
 - name: Postgres Restart
   ansible.builtin.systemd:
     name: "{{ databases_postgres.user }}"

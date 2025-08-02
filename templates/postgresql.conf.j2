@@ -18,9 +18,10 @@
 
 # CONNECTION AND AUTHENTICATION
 # -----------------------------------------------------------------------------
-listen_addresses = '{{ databases_postgres.listen_address }}'
-port = {{ databases_postgres.port }}
+listen_addresses = '{{ postgres_listen_address }}'
+port = {{ postgres_port  }}
 max_connections = '100'
+unix_socket_directories = '/tmp'
 
 
 # ERROR REPORTING AND LOGGING - Systemd journal integration
