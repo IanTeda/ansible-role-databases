@@ -27,8 +27,8 @@
     mariadb_run_dir: "/run/{{ databases_mariadb.user }}"
     mariadb_systemd_name: "{{ databases_mariadb.user }}"
     mariadb_download_url: "https://archive.mariadb.org/mariadb-{{ databases_mariadb.release }}/source/mariadb-{{ databases_mariadb.release }}.tar.gz"
-    mariadb_binary_path: "/usr/local/bin/mysqld"
-    mariadb_socket_path: "/tmp/mariadb.sock"
+    mariadb_binary_path: "/usr/local/bin/mariadb"
+    mariadb_socket_path: "{{ databases_mariadb.socket_path }}"
   tags:
     - install
     - config

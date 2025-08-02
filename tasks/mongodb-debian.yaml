@@ -469,8 +469,8 @@
 # -----------------------------------------------------------------------------
 - name: Wait for MongoDB to be available
   ansible.builtin.wait_for:
-    port: "{{ databases_mongodb.port }}"
     host: "{{ databases_mongodb.listen_address }}"
+    port: "{{ databases_mongodb.port }}"
     timeout: 30
   tags:
     - install

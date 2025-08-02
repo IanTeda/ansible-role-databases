@@ -1,0 +1,10 @@
+# ============================================================================
+# InfluxDB Configuration File (Ansible managed)
+# Minimal config for initial startup and testing
+# ============================================================================
+
+[meta]
+  dir = "{{ influxdb_data_dir }}/meta"
+
+[http]
+  bind-address = "{{ databases_influxdb.listen_address }}:{{ databases_influxdb.port }}"

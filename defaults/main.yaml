@@ -73,3 +73,5 @@ databases_valkey:
   release: '8.1.3' # <-- https://github.com/valkey-io/valkey/releases
   listen_address: '127.0.0.1'
   port: 6379
+  socket_path: '/tmp/.valkey.sock'
+  socket_perm: '770' # Permissions for the Unix socket

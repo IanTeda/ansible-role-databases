@@ -21,6 +21,9 @@ bind {{ databases_valkey.listen_address }}
 # If port 0 is specified the server will not listen on a TCP socket.
 port {{ databases_valkey.port }}
 
+unixsocket {{ databases_valkey.socket_path }}
+unixsocketperm {{ databases_valkey.socket_perm }}
+
 # When the server is supervised by upstart or systemd, the daemonize parameter has 
 # no impact.
 daemonize no

@@ -1,0 +1,12 @@
+# ============================================================================
+# InfluxDB UFW Application Profile (Ansible managed)
+# ----------------------------------------------------------------------------
+# This file is managed by Ansible. Manual changes will be overwritten!
+# Template: roles/databases/templates/influxdb-ufw-profile.j2
+# Deploy: /etc/ufw/applications.d/{{ influxdb_systemd_name }}
+# ============================================================================
+
+[InfluxDB]
+title=InfluxDB Time Series Database
+description=Open source time series database for metrics and events.
+ports={{ databases_influxdb.port }}/tcp

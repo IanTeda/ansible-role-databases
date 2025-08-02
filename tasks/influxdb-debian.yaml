@@ -146,11 +146,23 @@
     - install
 
 - name: Remove influxdb user "{{ influxdb_user }}"
+  when: uninstall_confirmation.user_input | bool
   ansible.builtin.user:
     name: "{{ influxdb_user }}"
     state: absent
     remove: yes
     force: yes
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove InfluxDB group "{{ influxdb_group }}" on uninstall
+  when: uninstall_confirmation.user_input | bool
+  ansible.builtin.group:
+    name: "{{ influxdb_group }}"
+    state: absent
   become: true
   failed_when: false
   tags:
@@ -167,10 +179,14 @@
   loop:
     - { path: "{{ influxdb_config_dir }}", mode: "u=rwx,g=rw,o="}
     - { path: "{{ influxdb_data_dir }}",   mode: "u=rwx,g=r,o="}
+    - { path: "{{ influxdb_data_dir }}/object_store",   mode: "u=rwx,g=r,o="}
+    - { path: "{{ influxdb_data_dir }}/meta",   mode: "u=rwx,g=r,o="}
+    - { path: "{{ influxdb_data_dir }}/wal",   mode: "u=rwx,g=r,o="}
   become: true
   tags:
     - directories
     - install
+    - config
 
 - name: Remove directories for influxdb service during uninstallation
   when: uninstall_confirmation.user_input | bool
@@ -330,6 +346,27 @@
     - install
     - build
 
+- name: Verify InfluxDB binary is installed and executable
+  ansible.builtin.stat:
+    path: "{{ influxdb_binary_path }}"
+  register: influxdb_binary_stat
+  tags:
+    - install
+    - build
+    - verify
+
+- name: Assert InfluxDB binary exists and is executable
+  ansible.builtin.assert:
+    that:
+      - influxdb_binary_stat.stat.exists
+      - influxdb_binary_stat.stat.executable
+    fail_msg: "InfluxDB binary is missing or not executable at {{ influxdb_binary_path }}"
+    success_msg: "InfluxDB binary is present and executable at {{ influxdb_binary_path }}"
+  tags:
+    - install
+    - build
+    - verify
+
 - name: Remove InfluxDB source directory after build
   ansible.builtin.file:
     path: "/tmp/influxdb-{{ databases_influxdb.release }}"
@@ -339,206 +376,394 @@
     - cleanup
     - build
 
+- name: Remove Rust install after build
+  ansible.builtin.file:
+    path: "{{ influxdb_home_dir }}/.cargo"
+    state: absent
+  become: true
+  when: uninstall_confirmation.user_input | bool
+  tags:
+    - uninstall
+    - cleanup
+    - build
+  
 - name: Uninstall compiled influxdb binary
+  when: uninstall_confirmation.user_input | bool
   ansible.builtin.file:
     path: '{{ influxdb_binary_path }}'
     state: absent
   tags:
+    - never
     - uninstall
-    - influxdb
 
 
 
+## 00 INSTALL INFLUX BINARY (OTPIONAL)
+# This is an option section to install the precompiled binaries in leu of compiling
+# from source
+# ------------------------------------------------------------------------------
 
-# - name: Download InfluxDB binary
-#   ansible.builtin.get_url:
-#     url: "https://dl.influxdata.com/influxdb/releases/influxdb2-2.7.5-linux-amd64.tar.gz"
-#     dest: /tmp/influxdb.tar.gz
-#     mode: '0644'
-#   become: true
-#   tags:
-#     - install
-#     - influxdb
+- name: Download InfluxDB binary
+  ansible.builtin.get_url:
+    url: "https://dl.influxdata.com/influxdb/releases/influxdb2-2.7.5-linux-amd64.tar.gz"
+    dest: /tmp/influxdb.tar.gz
+    mode: '0644'
+  become: true
+  tags:
+    - never
+    - binary
 
-# - name: Extract InfluxDB binary
-#   ansible.builtin.unarchive:
-#     src: /tmp/influxdb.tar.gz
-#     dest: /usr/local/
-#     remote_src: yes
-#     creates: /usr/local/influxdb2-2.7.5-linux-amd64
-#   become: true
-#   tags:
-#     - install
-#     - influxdb
+- name: Extract InfluxDB binary
+  ansible.builtin.unarchive:
+    src: /tmp/influxdb.tar.gz
+    dest: /usr/local/
+    remote_src: yes
+    creates: /usr/local/influxdb2-2.7.5-linux-amd64
+  become: true
+  tags:
+    - never
+    - binary
 
-# - name: Symlink influxdb binary to /usr/local/bin
-#   ansible.builtin.file:
-#     src: /usr/local/influxdb2-2.7.5-linux-amd64/influxd
-#     dest: /usr/local/bin/influxd
-#     state: link
-#     force: yes
-#   become: true
-#   tags:
-#     - install
-#     - influxdb
-
-
+- name: Symlink influxdb binary to /usr/local/bin
+  ansible.builtin.file:
+    src: /usr/local/influxdb2-2.7.5-linux-amd64/influxd
+    dest: /usr/local/bin/influxd
+    state: link
+    force: yes
+  become: true
+  tags:
+    - never
+    - binary
 
 
 
+## INFLUX CONFIGURATION
+# -----------------------------------------------------------------------------
 
-# - name: Install InfluxDB
-#   ansible.builtin.apt:
-#     name: influxdb
-#     state: present
-#     update_cache: yes
-#   become: true
-#   tags:
-#     - install
-#     - influxdb
+- name: Deploy InfluxDB configuration
+  ansible.builtin.template:
+    src: templates/influxdb.conf.j2
+    dest: "{{ influxdb_config_file }}"
+    owner: influxdb
+    group: influxdb
+    mode: '0640'
+  become: true
+  tags:
+    - install
+    - config
 
-# - name: Ensure influxdb user exists
-#   ansible.builtin.user:
-#     name: influxdb
-#     system: yes
-#     shell: /usr/sbin/nologin
-#   become: true
-#   tags:
-#     - install
-#     - influxdb
-
-# - name: Deploy InfluxDB configuration
-#   ansible.builtin.template:
-#     src: templates/influxdb.conf.j2
-#     dest: /etc/influxdb/influxdb.conf
-#     owner: influxdb
-#     group: influxdb
-#     mode: '0640'
-#   become: true
-#   notify: Restart InfluxDB
-#   tags:
-#     - config
-#     - influxdb
-
-# - name: Deploy InfluxDB systemd service unit
-#   ansible.builtin.template:
-#     src: templates/influxdb-systemd.service.j2
-#     dest: /etc/systemd/system/influxdb.service
-#     owner: root
-#     group: root
-#     mode: '0644'
-#   become: true
-#   notify: Reload systemd
-#   tags:
-#     - config
-#     - influxdb
-
-# - name: Reload systemd
-#   ansible.builtin.systemd:
-#     daemon_reload: yes
-#   become: true
-#   tags:
-#     - config
-#     - influxdb
-
-# - name: Enable and start InfluxDB service
-#   ansible.builtin.systemd:
-#     name: influxdb
-#     enabled: yes
-#     state: started
-#   become: true
-#   tags:
-#     - install
-#     - config
-#     - influxdb
-
-# - name: Verify InfluxDB service is running
-#   ansible.builtin.systemd:
-#     name: influxdb
-#     state: started
-#   register: influxdb_status
+# Not supported as of now
+# - name: Check InfluxDB configuration file syntax
+#   ansible.builtin.command: "{{ influxdb_binary_path }} config check --config-file {{ influxdb_config_file }}"
+#   register: influxdb_config_check
+#   changed_when: false
+#   failed_when: influxdb_config_check.rc != 0
 #   become: true
 #   tags:
 #     - verify
-#     - influxdb
-
-# - name: Check InfluxDB HTTP API
-#   ansible.builtin.uri:
-#     url: http://localhost:8086/ping
-#     method: GET
-#     status_code: 204
-#     return_content: no
-#   register: influxdb_api
-#   tags:
-#     - verify
-#     - influxdb
-
-# - name: Deploy UFW application profile for InfluxDB
-#   ansible.builtin.template:
-#     src: templates/influxdb.ufw.profile.j2
-#     dest: /etc/ufw/applications.d/influxdb
-#     owner: root
-#     group: root
-#     mode: '0644'
-#   become: true
-#   tags:
 #     - config
-#     - ufw
 #     - influxdb
 
-# - name: Allow InfluxDB through UFW
-#   ansible.builtin.ufw:
-#     rule: allow
-#     name: influxdb
+
+
+## 05. SETUP SYSTEMD FOR INFLUXDB
+# -----------------------------------------------------------------------------
+- name: Deploy systemd unit for InfluxDB
+  ansible.builtin.template:
+    src: templates/influxdb-systemd.service.j2
+    dest: "/lib/systemd/system/{{ influxdb_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify InfluxDB systemd service config is valid
+  ansible.builtin.command: "systemd-analyze verify /lib/systemd/system/{{ influxdb_systemd_name }}.service"
+  register: influxdb_systemd_verify
+  changed_when: false
+  failed_when: influxdb_systemd_verify.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+
+- name: Reload systemd and start InfluxDB service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ influxdb_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags:
+    - install
+    - config
+
+- name: Verify InfluxDB service is active
+  ansible.builtin.systemd:
+    name: "{{ influxdb_systemd_name }}"
+  register: influxdb_service_status
+  changed_when: false
+  tags:
+    - verify
+    - healthcheck
+
+- name: Assert InfluxDB service is running
+  ansible.builtin.assert:
+    that:
+      - influxdb_service_status.status.ActiveState == "active"
+    fail_msg: "InfluxDB service is NOT active."
+    success_msg: "InfluxDB service is active."
+  tags:
+    - verify
+    - healthcheck
+
+
+
+## 06. INITIALS INFLUXDB DATABASE
+# Iniitalise an InfluxDB database
+# -----------------------------------------------------------------------------
+
+# - name: Create a new database using admin token
+#   ansible.builtin.command: >
+#     {{ influxdb_binary_path }} create database {{ influxdb_user }} --host http://{{ databases_influxdb.listen_address }}:{{ databases_influxdb.port }} --token {{ databases_admin.password }}
+#   register: influxdb_create_db
 #   become: true
+#   become_user: "{{ influxdb_user }}"
 #   tags:
+#     - install
 #     - config
-#     - ufw
-#     - influxdb
+#     - admin
 
-# - name: Uninstall InfluxDB
-#   ansible.builtin.apt:
-#     name: influxdb
-#     state: absent
-#   become: true
-#   tags:
-#     - uninstall
-#     - influxdb
 
-# - name: Remove InfluxDB configuration
-#   ansible.builtin.file:
-#     path: /etc/influxdb/influxdb.conf
-#     state: absent
-#   become: true
-#   tags:
-#     - uninstall
-#     - influxdb
 
-# - name: Remove InfluxDB systemd service unit
-#   ansible.builtin.file:
-#     path: /etc/systemd/system/influxdb.service
-#     state: absent
-#   become: true
-#   tags:
-#     - uninstall
-#     - influxdb
+## 06. SETUP FIREWALL FOR INFLUXDB
+# -----------------------------------------------------------------------------
 
-# - name: Remove UFW application profile for InfluxDB
-#   ansible.builtin.file:
-#     path: /etc/ufw/applications.d/influxdb
-#     state: absent
-#   become: true
-#   tags:
-#     - uninstall
-#     - ufw
-#     - influxdb
+- name: Deploy InfluxDB UFW application profile
+  ansible.builtin.template:
+    src: templates/influxdb-ufw-profile.j2
+    dest: "/etc/ufw/applications.d/{{ influxdb_systemd_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags:
+    - install
+    - config
 
-# - name: Disable InfluxDB service
-#   ansible.builtin.systemd:
-#     name: influxdb
-#     enabled: no
-#     state: stopped
-#   become: true
-#   tags:
-#     - uninstall
-#     - influxdb
+- name: Reload UFW InfluxDB application profiles
+  ansible.builtin.command: "ufw app update {{ influxdb_systemd_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags:
+    - install
+    - config
+
+- name: Allow InfluxDB through UFW using application profile
+  ansible.builtin.ufw:
+    rule: allow
+    name: "InfluxDB"
+    comment: "Allow InfluxDB ({{ databases_influxdb.port }}/tcp) from LOCAL NET"
+    src: "{{ item }}"
+  loop: "{{ networking_networks.local }}"
+  become: true
+  tags:
+    - never
+    - firewall
+
+- name: Confirm InfluxDB UFW profile is allowed for local networks
+  ansible.builtin.command: "ufw status numbered"
+  register: influxdb_ufw_status
+  changed_when: false
+  tags:
+    - never
+    - firewall
+
+- name: Assert InfluxDB UFW rule exists for each local network
+  ansible.builtin.assert:
+    that:
+      - "'InfluxDB' in influxdb_ufw_status.stdout and item in influxdb_ufw_status.stdout"
+    fail_msg: "InfluxDB UFW rule is NOT present for {{ item }}"
+    success_msg: "InfluxDB UFW rule is present for {{ item }}"
+  loop: "{{ networking_networks.local }}"
+  tags:
+    - never
+    - firewall
+
+- name: Remove UFW rules for InfluxDB application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.ufw:
+    rule: deny
+    name: "InfluxDB"
+    delete: true
+  become: true
+  failed_when: false
+  tags:
+    - uninstall
+    - never
+
+- name: Remove InfluxDB UFW application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.file:
+    path: "/etc/ufw/applications.d/{{ influxdb_systemd_name }}"
+    state: absent
+  become: true
+  tags:
+    - uninstall
+    - never
+
+
+
+## 07. HEALTH CHECKS FOR INFLUXDB
+# -----------------------------------------------------------------------------
+
+- name: Check InfluxDB HTTP API /ping endpoint
+  ansible.builtin.uri:
+    url: "http://{{ databases_influxdb.listen_address }}:{{ databases_influxdb.port }}/ping"
+    method: GET
+    status_code: 204
+    return_content: no
+    timeout: 5
+  register: influxdb_ping
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert InfluxDB /ping endpoint is healthy
+  ansible.builtin.assert:
+    that:
+      - influxdb_ping.status == 204
+    fail_msg: "InfluxDB /ping endpoint is not healthy or not reachable."
+    success_msg: "InfluxDB /ping endpoint is healthy."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check InfluxDB /health endpoint
+  ansible.builtin.uri:
+    url: "http://{{ databases_influxdb.listen_address }}:{{ databases_influxdb.port }}/health"
+    method: GET
+    status_code: 200
+    return_content: yes
+    timeout: 5
+  register: influxdb_health
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert InfluxDB /health endpoint reports healthy
+  ansible.builtin.assert:
+    that:
+      - influxdb_health.status == 200
+      - influxdb_health.json.status is defined
+      - influxdb_health.json.status == "pass"
+    fail_msg: "InfluxDB /health endpoint does not report healthy."
+    success_msg: "InfluxDB /health endpoint reports healthy."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check InfluxDB version
+  ansible.builtin.command: "{{ influxdb_binary_path }} version"
+  register: influxdb_version
+  changed_when: false
+  failed_when: influxdb_version.rc != 0
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Show InfluxDB version
+  ansible.builtin.debug:
+    var: influxdb_version.stdout
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check InfluxDB service status with systemd
+  ansible.builtin.systemd:
+    name: "{{ influxdb_systemd_name }}"
+  register: influxdb_service_status
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Assert InfluxDB service is running
+  ansible.builtin.assert:
+    that:
+      - influxdb_service_status.status.ActiveState == "active"
+    fail_msg: "InfluxDB service is NOT active."
+    success_msg: "InfluxDB service is active."
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check InfluxDB TCP port is open
+  ansible.builtin.wait_for:
+    host: "{{ databases_influxdb.listen_address }}"
+    port: "{{ databases_influxdb.port }}"
+    state: started
+    timeout: 5
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check disk space for InfluxDB data directory
+  ansible.builtin.command: "df -h {{ influxdb_data_dir }}"
+  register: influxdb_disk
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Show disk space for InfluxDB data directory
+  ansible.builtin.debug:
+    var: influxdb_disk.stdout_lines
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Check InfluxDB log for recent errors
+  ansible.builtin.shell: "journalctl -u {{ influxdb_systemd_name }} --since '5 minutes ago' | grep -i error || true"
+  register: influxdb_recent_errors
+  changed_when: false
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
+
+- name: Show recent InfluxDB errors from logs
+  ansible.builtin.debug:
+    var: influxdb_recent_errors.stdout_lines
+  tags:
+    - install
+    - config
+    - verify
+    - healthcheck
