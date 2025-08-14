@@ -50,6 +50,8 @@ databases_mariadb:
   release: '12.0.1' # <-- https://github.com/MariaDB/server/releases
   listen_address: '127.0.0.1'
   port: 3306
+  socket_path: '/run/mariadb/.mariadb.sock'
+  socket_perm: '770' # Permissions for the Unix socket
 
 # MongoDB configuration
 databases_mongodb:

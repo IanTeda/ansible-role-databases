@@ -29,12 +29,7 @@
     mariadb_download_url: "https://archive.mariadb.org/mariadb-{{ databases_mariadb.release }}/source/mariadb-{{ databases_mariadb.release }}.tar.gz"
     mariadb_binary_path: "/usr/local/bin/mariadb"
     mariadb_socket_path: "{{ databases_mariadb.socket_path }}"
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
-    - uninstall
+  tags: [always]
 
 - name: Display MariaDB variables for debugging
   ansible.builtin.debug:
@@ -158,6 +153,15 @@
   become: true
   tags:
     - install
+
+- name: Add default user "{{ vault_default_user_name }}" to MariaDB group "{{ mariadb_group }}"
+  ansible.builtin.user:
+    name: "{{ vault_default_user_name }}"
+    groups: "{{ mariadb_group }}"
+    append: yes
+  become: true
+  tags: [install, user_group]
+
 
 - name: Delete MariaDB system user on uninstall
   when: uninstall_confirmation | bool
