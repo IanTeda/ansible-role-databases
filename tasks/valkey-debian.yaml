@@ -69,17 +69,12 @@
     valkey_binary_download_url: "https://download.databases_valkey.io/releases/valkey-{{ databases_valkey.release }}-jammy-x86_64.tar.gz"
     valkey_repo_download_url: "https://github.com/valkey-io/valkey/archive/refs/tags/{{ databases_valkey.release }}.tar.gz"
     valkey_binary_path: "/usr/local/bin/{{ databases_valkey.user }}"
-  tags:
-    - install
-    - build
-    - config
-    - healthcheck
+  tags: [always]
 
 - name: Display Valkey variables for debugging
   ansible.builtin.debug:
     var: databases_valkey
-  tags:
-    - debug
+  tags: [debug]
 
 - name: Display Valkey facts for debugging
   ansible.builtin.debug:
@@ -94,8 +89,7 @@
       - "Fact -> valkey_binary_download_url: {{ valkey_binary_download_url }}"
       - "Fact -> valkey_repo_download_url: {{ valkey_repo_download_url }}"
       - "Fact -> valkey_binary_path: {{ valkey_binary_path }}"
-  tags:
-    - debug
+  tags: [debug]
 
 - name: Confirm Valkey uninstallation
   ansible.builtin.pause:
@@ -117,9 +111,7 @@
       
       Are you sure you want to proceed with the uninstallation? (yes/no)
   register: uninstall_confirmation
-  tags:
-    - never
-    - uninstall
+  tags: [never, uninstall]
 
 - name: Uninstallation Aborted
   ansible.builtin.fail:
@@ -129,9 +121,7 @@
       The Valkey service remains installed and operational.
       No changes have been made to the system.
   when: not (uninstall_confirmation.user_input | bool)
-  tags:
-    - never
-    - uninstall
+  tags: [never, uninstall]
 
 
 
@@ -144,9 +134,7 @@
   ansible.builtin.stat:
     path: "/lib/systemd/system/{{ valkey_systemd_name }}.service"
   register: service_file
-  tags:
-    - install
-    - config
+  tags: [install, config]
 
 - name: Ensure Valkey service is stopped before modifying
   ansible.builtin.systemd:
@@ -155,9 +143,7 @@
   become: true
   failed_when: false
   when: service_file.stat.exists
-  tags:
-    - install
-    - config
+  tags: [install, config]
 
 - name: Stop and disable Valkey service during uninstallation
   when: uninstall_confirmation.user_input | bool
@@ -167,9 +153,7 @@
     enabled: no
   become: true
   failed_when: false
-  tags:
-    - uninstall
-    - never
+  tags: [uninstall, never]
 
 
 
@@ -186,8 +170,7 @@
     create_home: false
     comment: "Valkey Service system account"
   become: true
-  tags:
-    - install
+  tags: [install]
 
 - name: Create directories for Valkey service
   ansible.builtin.file:
@@ -200,8 +183,7 @@
     - { path: "{{ valkey_config_dir }}", mode: "u=rwx,g=r,o="}
     - { path: "{{ valkey_data_dir }}",   mode: "u=rwx,g=,o="}
   become: true
-  tags:
-    - install
+  tags: [install]
 
 - name: Remove directories for Valkey service during uninstallation
   when: uninstall_confirmation.user_input | bool
@@ -212,9 +194,7 @@
     - { path: "{{ valkey_config_dir }}", mode: "u=rwx,g=r,o="}
     - { path: "{{ valkey_data_dir }}",   mode: "u=rwx,g=,o="}
   become: true
-  tags:
-    - never 
-    - uninstall
+  tags: [never, uninstall]
 
 
 
@@ -228,9 +208,7 @@
     url: "{{ valkey_binary_download_url }}"
     dest: "/tmp/valkey-{{ databases_valkey.release }}.tar.gz"
     mode: '0644'
-  tags:
-    - never
-    - binary
+  tags: [never, binary]
 
 - name: Extract Valkey tarball
   ansible.builtin.unarchive:
@@ -240,9 +218,7 @@
     creates: "/tmp/valkey/valkey-server"
     extra_opts:
       - --strip-components=1
-  tags:
-    - never
-    - binary
+  tags: [never, binary]
 
 - name: Copy Valkey binaries to /usr/local/bin
   ansible.builtin.copy:
@@ -256,9 +232,7 @@
     - valkey-server
     - valkey-cli
   become: true
-  tags:
-    - never
-    - binary
+  tags: [never, binary]
 
 - name: Clean up downloaded Valkey binary tarball and extracted files
   ansible.builtin.file:
@@ -267,9 +241,7 @@
   loop:
     - "/tmp/databases_valkey.tar.gz"
     - "/tmp/valkey"
-  tags:
-    - never
-    - binary
+  tags: [never, binary]
 
 - name: Ensure build dependencies are installed
   ansible.builtin.apt:
@@ -282,9 +254,7 @@
     state: present
     update_cache: yes
   become: true
-  tags:
-    - build
-    - install
+  tags: [build, install]
 
 - name: Download Valkey source release "{{ databases_valkey.release }}" tarball
   ansible.builtin.get_url:
@@ -292,9 +262,7 @@
     dest: "/tmp/valkey-{{ databases_valkey.release }}.tar.gz"
     mode: '0644'
   become: true
-  tags:
-    - build
-    - install
+  tags: [build, install]
 
 - name: Ensure Valkey source tmp directory exists before extract
   ansible.builtin.file:
@@ -304,8 +272,7 @@
     group: "{{ valkey_group }}"
     mode: '0755'
   become: true
-  tags:
-    - install
+  tags: [build, install]
 
 - name: Extract Valkey source release
   ansible.builtin.unarchive:
@@ -315,18 +282,14 @@
     extra_opts:
       - --strip-components=1
   become: true
-  tags:
-    - build
-    - install
+  tags: [build, install]
 
 - name: Build Valkey from source
   ansible.builtin.command: make
   args:
     chdir: "/tmp/valkey-{{ databases_valkey.release }}/"
   become: true
-  tags:
-    - build
-    - install
+  tags: [build, install]
 
 - name: Run Valkey tests
   ansible.builtin.command: make test
@@ -334,18 +297,14 @@
     chdir: "/tmp/valkey-{{ databases_valkey.release }}/"
   ignore_errors: true
   become: true
-  tags:
-    - build-test
-    - never
+  tags: [build-test, never]
 
 - name: Install Valkey binaries to /usr/local/bin
   ansible.builtin.command: make install
   args:
     chdir: "/tmp/valkey-{{ databases_valkey.release }}/"
   become: true
-  tags:
-    - build
-    - install
+  tags: [build, install]
 
 - name: Verify Valkey binaries are installed and executable
   ansible.builtin.command: "{{ item }} --version"
@@ -355,9 +314,7 @@
   register: valkey_bin_check
   changed_when: false
   failed_when: valkey_bin_check.rc != 0
-  tags:
-    - install
-    - verify
+  tags: [install, verify]
 
 - name: Show Valkey server and CLI versions
   ansible.builtin.debug:
@@ -365,10 +322,7 @@
       - valkey-server version: {{ valkey_bin_check.results[0].stdout | default('N/A') }}
       - valkey-cli version:    {{ valkey_bin_check.results[1].stdout | default('N/A') }}
   when: valkey_bin_check is defined and valkey_bin_check.results is defined
-  tags:
-    - install
-    - verify
-
+  tags: [install, verify]
 
 
 
@@ -384,9 +338,7 @@
     group: "{{ valkey_group }}"
     mode: '0640'
   become: true
-  tags:
-    - install
-    - config
+  tags: [install, config]
 
 # See: https://github.com/jemalloc/jemalloc/issues/1328 for why overcommit_memory is important for Redis/Valkey fork() operations
 - name: Ensure memory overcommit is enabled for Valkey
@@ -397,17 +349,13 @@
     sysctl_set: true
     reload: true
   become: true
-  tags:
-    - never
-    - sysctl-on
+  tags: [never, sysctl-on]
 
 - name: Apply vm.overcommit_memory=1 immediately
   ansible.builtin.command: sysctl vm.overcommit_memory=1
   become: true
   changed_when: false
-  tags:
-    - never
-    - sysctl-on
+  tags: [never, sysctl-on]
 
 - name: Remove memory overcommit (set to 0)
   ansible.builtin.sysctl:
@@ -417,9 +365,7 @@
     sysctl_set: true
     reload: true
   become: true
-  tags:
-    - never
-    - sysctl-off
+  tags: [never, sysctl-off]
 
 
 
@@ -435,19 +381,14 @@
     group: root
     mode: '0644'
   become: true
-  tags:
-    - install
-    - config
+  tags: [install, config]
 
 - name: Verify Valkey systemd service config is valid
   ansible.builtin.command: systemd-analyze verify /lib/systemd/system/{{ valkey_systemd_name }}.service
   register: systemd_verify
   changed_when: false
   failed_when: systemd_verify.rc != 0
-  tags:
-    - install
-    - config
-    - verify
+  tags: [install, config, verify]
 
 - name: Reload systemd and start Valkey service
   ansible.builtin.systemd_service:
@@ -456,31 +397,21 @@
     enabled: true
     state: started
   become: true
-  tags:
-    - install
-    - config
+  tags: [install, config]
 
 - name: Check Valkey service status
   ansible.builtin.systemd:
     name: "{{ valkey_systemd_name }}"
   register: valkey_status
   become: true
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Wait for Valkey server to be available
   ansible.builtin.wait_for:
     host: "{{ databases_valkey.listen_address }}"
     port: "{{ databases_valkey.port }}"
     timeout: 30
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Assert Valkey is running
   ansible.builtin.assert:
@@ -489,11 +420,7 @@
       - valkey_status.status.SubState == "running"
     fail_msg: "Valkey service is not running! Status: {{ valkey_status.status.ActiveState }}"
     success_msg: "Valkey service is running successfully."
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Delete Systemd service for Valkey
   when: uninstall_confirmation.user_input | bool
@@ -501,18 +428,14 @@
     path: "/lib/systemd/system/{{ valkey_systemd_name }}.service"
     state: absent
   become: true
-  tags:
-    - never 
-    - uninstall
+  tags: [never, uninstall]
 
 - name: Reload systemd after removing service
   when: uninstall_confirmation.user_input | bool
   ansible.builtin.systemd_service:
     daemon_reload: true
   become: true
-  tags:
-    - never 
-    - uninstall
+  tags: [never, uninstall]
 
 
 
@@ -529,18 +452,14 @@
     group: root
     mode: '0644'
   become: true
-  tags:
-    - install
-    - config
+  tags: [install, config, firewall]
 
 - name: Reload UFW Valkey application profiles
   ansible.builtin.command: "ufw app update {{ valkey_systemd_name }}"
   become: true
   changed_when: false
   failed_when: false
-  tags:
-    - install
-    - config
+  tags: [install, config, firewall]
 
 - name: Allow Valkey through UFW using application profile
   ansible.builtin.ufw:
@@ -550,17 +469,13 @@
     src: "{{ item }}"
   loop: "{{ networking_networks.local }}"
   become: true
-  tags:
-    - never
-    - firewall
+  tags: [never, firewall]
 
 - name: Confirm Valkey UFW profile is allowed for local networks
   ansible.builtin.command: "ufw status numbered"
   register: ufw_status
   changed_when: false
-  tags:
-    - never
-    - firewall
+  tags: [never, firewall]
 
 - name: Assert Valkey UFW rule exists for each local network
   ansible.builtin.assert:
@@ -569,9 +484,7 @@
     fail_msg: "Valkey UFW rule is NOT present for {{ item }}"
     success_msg: "Valkey UFW rule is present for {{ item }}"
   loop: "{{ local_networks }}"
-  tags:
-    - never
-    - firewall
+  tags: [never, firewall]
 
 - name: Remove UFW rules for Valkey application profile on uninstall
   when: uninstall_confirmation
@@ -581,9 +494,7 @@
     delete: true
   become: true
   failed_when: false
-  tags:
-    - uninstall
-    - never
+  tags: [never, uninstall]
 
 - name: Remove Valkey UFW application profile
   when: uninstall_confirmation
@@ -591,9 +502,7 @@
     path: "/etc/ufw/applications.d/{{ valkey_systemd_name }}"
     state: absent
   become: true
-  tags:
-    - uninstall
-    - never
+  tags: [never, uninstall]
 
 
 
@@ -618,31 +527,19 @@
     - valkey_auth_ping.rc != 0
     - valkey_auth_ping.stdout.strip() != 'PONG'
   when: databases_admin.password is defined and databases_admin.password|length > 0
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Show Valkey ping result
   ansible.builtin.debug:
     msg: "Valkey ping result: {{ valkey_auth_ping.stdout }}"
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Get Valkey INFO output
   ansible.builtin.command: valkey-cli -a "{{ databases_admin.password }}" -p "{{ databases_valkey.port }}" info
   register: valkey_info
   changed_when: false
   failed_when: valkey_info.rc != 0
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]
 
 - name: Check Valkey used memory is below 90% of system memory
   ansible.builtin.shell: |
@@ -655,8 +552,4 @@
   register: valkey_mem_check
   changed_when: false
   failed_when: valkey_mem_check.rc != 0
-  tags:
-    - install
-    - config
-    - verify
-    - healthcheck
+  tags: [install, config, verify, healthcheck]

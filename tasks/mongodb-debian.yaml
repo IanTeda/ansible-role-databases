@@ -237,6 +237,7 @@
     remote_src: true
     owner: "{{ mongodb_user }}"
     group: "{{ mongodb_group }}"
+    extra_opts: ["--strip-components=1"]
   become: true
   tags:
     - install
@@ -322,12 +323,13 @@
 
 - name: Check MongoDB configuration file syntax
   ansible.builtin.command:
-    cmd: "/usr/local/bin/mongod --config {{ mongodb_config_file }} --sysinfo"
+    cmd: "/usr/local/bin/mongod --config {{ mongodb_config_file }} --version"
   register: mongodb_config_check
   changed_when: false
   failed_when: mongodb_config_check.rc != 0
   become: true
-  become_user: "{{ mongodb_user }}"
+  # Removed become_user to run as root instead of mongodb user
+  # become_user: "{{ mongodb_user }}"
   tags:
     - install
     - config
