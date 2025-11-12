@@ -14,5 +14,5 @@ systemLog:
 
 # Network interfaces.
 net:
-  bindIp: {{ databases_mongodb.listen_address }}
-  port: {{ databases_mongodb.port }}
+  bindIp: {{ mongodb_listen_address }}
+  port: {{ mongodb_port }}

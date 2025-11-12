@@ -57,9 +57,15 @@ databases_mariadb:
 databases_mongodb:
   user: 'mongodb'
   group: 'mongodb'
-  release: '8.0.12' # <-- https://www.mongodb.com/try/download/community
+  builder_user: 'ansible'
+  builder_group: 'ansible'
+  release: '7.0.15' # <-- https://www.mongodb.com/try/download/community (ARM64 compatible)
   listen_address: '127.0.0.1'
   port: 27017
+  config_dir: '/etc/mongod'
+  data_dir: '/var/lib/mongodb'
+  home_dir: '/opt/mongodb'
+  install_dir: '/opt/mongodb'
 
 # PostgreSQL configuration  
 databases_postgres:

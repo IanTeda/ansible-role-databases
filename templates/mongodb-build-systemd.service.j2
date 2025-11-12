@@ -1,27 +1,28 @@
 # ============================================================================
-# MongoDB systemd Service Unit (Ansible managed)
+# MongoDB systemd Service Unit (Ansible managed) - Build Role
 # ============================================================================
 # ⚠️ WARNING: This file is managed by Ansible - DO NOT EDIT MANUALLY!       ⚠️
 # Any manual changes will be overwritten on the next Ansible run.
 # Edit the template file or Ansible variables instead.
 #
-# Template path: roles/databases/templates/mongodb-systemd.service.j2
+# Template path: roles/databases/templates/mongodb-build-systemd.service.j2
 # Deploy path: /lib/systemd/system/{{ mongodb_systemd_name }}.service
 # Last deployed: {{ ansible_date_time.iso8601 }}
 # =============================================================================
 #
-# This systemd service file configures MongoDB to run as a system service.
+# This systemd service file configures MongoDB (built from source) to run as a system service.
 #
 # Features:
 #   - Runs mongod as a dedicated system user
 #   - Logs to systemd journal
 #   - Hardened with systemd security options
+#   - Uses custom installation path from source build
 #
 # Configuration:
 #   - Config file: {{ mongodb_config_file }}
 #   - Data directory: {{ mongodb_data_dir }}
 #   - User: {{ mongodb_user }}
-#   - Binary: /usr/bin/mongod
+#   - Binary: {{ mongodb_binary_path }}
 #   - Logs: sudo journalctl -u {{ mongodb_systemd_name }} -f
 #
 # Usage:
@@ -45,15 +46,14 @@
 # ------------------------------------------------------------------------------
 
 [Unit]
-Description=MongoDB Database Server
+Description=MongoDB Database Server (Built from Source)
 Documentation=https://docs.mongodb.com/manual/
 After=network.target
 Requires=network.target
 
 [Service]
-ExecStart=/usr/bin/mongod --config {{ mongodb_config_file }} \
-                            --dbpath {{ mongodb_data_dir }} \
-                            # --pidfilepath /run/{{ mongodb_systemd_name }}/mongod.pid
+ExecStart={{ mongodb_binary_path }} --config {{ mongodb_config_file }} \
+                                    --dbpath {{ mongodb_data_dir }}
 
 # Process management
 ####################
@@ -63,7 +63,6 @@ RestartSec=10
 User={{ mongodb_user }}
 Group={{ mongodb_group }}
 
-
 # Directory creation and permissions
 ####################################
 
@@ -72,13 +71,11 @@ RuntimeDirectoryMode=0750
 ReadOnlyPaths={{ mongodb_config_dir }}
 ReadWritePaths={{ mongodb_data_dir }}
 
-
 # Logging to systemd
 ####################
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier={{ mongodb_systemd_name }}
-
 
 # Hardening measures
 ####################

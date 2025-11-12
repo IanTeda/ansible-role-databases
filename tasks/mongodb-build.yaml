@@ -1,0 +1,809 @@
+# ============================================================================
+# Ansible Task File: mongodb-build.yaml
+# ----------------------------------------------------------------------------
+# This file is managed by Ansible. Manual changes may be overwritten!
+#
+# Purpose: Complete automation of MongoDB source code compilation, build,
+# installation, configuration, service management, user setup, firewall, and
+# health checks for Debian-based systems across multiple architectures.
+#
+# Supports: x86_64, aarch64 (ARM64), and other architectures
+# Build Method: Source compilation with SCons
+#
+# Managed by: roles/databases/tasks/mongodb-build.yaml
+# Project: ansible_playbook
+# Maintainer: IanTeda
+# ============================================================================
+
+## 00. SET MONGODB BUILD FACTS
+# -----------------------------------------------------------------------------
+
+- name: Display MongoDB build variables for debugging
+  ansible.builtin.debug:
+    var: databases_mongodb
+  tags: [debug]
+
+- name: Set MongoDB build facts for the role
+  ansible.builtin.set_fact:
+    mongodb_user: "{{ databases_mongodb.user }}"
+    mongodb_group: "{{ databases_mongodb.group }}"
+    mongodb_systemd_name: "{{ databases_mongodb.user }}"
+    # Architecture detection for build optimization
+    mongodb_arch: "{{ ansible_architecture }}"
+    mongodb_arch_bits: "{{ '64' if ansible_architecture in ['x86_64', 'aarch64'] else '32' }}"
+    mongodb_builder_user: "{{ databases_mongodb.builder_user | default(ansible_user | default(ansible_user_id)) }}"
+    mongodb_builder_group: "{{ databases_mongodb.builder_group | default(databases_mongodb.builder_user | default(ansible_user | default(ansible_user_id))) }}"
+    # Source download and build staging
+    mongodb_source_dir: "/tmp/mongodb-src-r{{ databases_mongodb.release }}"
+    mongodb_build_dir: "/tmp/mongodb-build-{{ databases_mongodb.release }}"
+    mongodb_install_dir: "{{ databases_mongodb.install_dir | default(databases_mongodb.home_dir | default('/opt/mongodb')) }}"
+    # Build configuration
+    mongodb_build_cores: "{{ ansible_processor_vcpus | default(1) }}"
+    mongodb_build_flags: >
+      {{
+        [
+          '--ssl=on',
+          '--ssl-provider=openssl',
+          '--use-system-zlib',
+          '--use-system-snappy',
+          '--use-system-boost',
+          '--use-system-stemmer',
+          '--use-system-yaml',
+          '--use-system-pcre',
+          '--use-system-zstd',
+          '--disable-warnings-as-errors'
+        ] | join(' ')
+      }}
+  tags: [always]
+
+- name: Set MongoDB build directory facts
+  ansible.builtin.set_fact:
+    mongodb_config_dir: "{{ databases_mongodb.config_dir }}"
+    mongodb_data_dir: "{{ databases_mongodb.data_dir }}"
+    mongodb_home_dir: "{{ databases_mongodb.home_dir }}"
+    mongodb_systemd_dir: "/lib/systemd/system"
+    mongodb_log_dir: "/var/log/mongodb"
+    mongodb_install_bin_dir: "{{ mongodb_install_dir }}/bin"
+  tags: [always]
+
+- name: Set MongoDB build file facts
+  ansible.builtin.set_fact:
+    mongodb_config_file: "{{ mongodb_config_dir }}/{{ databases_mongodb.user }}.conf"
+    mongodb_binary_path: "{{ mongodb_install_bin_dir }}/mongod"
+    mongodb_socket_path: "/tmp/mongodb.sock"
+    mongodb_systemd_service: "{{ mongodb_systemd_dir }}/{{ mongodb_systemd_name }}.service"
+    mongodb_pid_file: "/var/run/mongodb.pid"
+    mongodb_log_file: "{{ mongodb_log_dir }}/mongod.log"
+  tags: [always]
+
+- name: Display MongoDB build facts for debugging
+  ansible.builtin.debug:
+    msg:
+      - "Build -> mongodb_arch: {{ mongodb_arch }} ({{ mongodb_arch_bits }}-bit)"
+      - "Build -> mongodb_build_cores: {{ mongodb_build_cores }}"
+      - "Build -> mongodb_source_dir: {{ mongodb_source_dir }}"
+      - "Build -> mongodb_build_dir: {{ mongodb_build_dir }}"
+      - "Build -> mongodb_install_dir: {{ mongodb_install_dir }}"
+      - "Build -> mongodb_builder_user: {{ mongodb_builder_user }}"
+      - "Build -> mongodb_build_python: {{ mongodb_build_python | default('auto-detecting') }}"
+      - "Build -> mongodb_imp_shim_required: {{ mongodb_imp_shim_required | default(false) }}"
+      - "Build -> mongodb_build_flags: {{ mongodb_build_flags }}"
+  tags: [debug]
+
+- name: Determine MongoDB build Python interpreter candidates
+  ansible.builtin.set_fact:
+    mongodb_python_candidates: >-
+      {{
+        (
+          ([databases_mongodb.build_python]
+           if databases_mongodb.build_python is defined and (databases_mongodb.build_python | string | length > 0) else [])
+          + (databases_mongodb.build_python_candidates
+             if databases_mongodb.build_python_candidates is defined else [])
+          + ['/usr/bin/python3.12', '/usr/bin/python3.11', '/usr/bin/python3.10', '/usr/bin/python3', '/usr/bin/python']
+        )
+        | list
+        | unique
+      }}
+  tags: [always]
+
+- name: Probe candidate Python interpreters for MongoDB build support
+  ansible.builtin.command:
+    argv:
+      - "{{ item }}"
+      - "-c"
+      - "import imp"
+  loop: "{{ mongodb_python_candidates }}"
+  register: mongodb_python_probe
+  changed_when: false
+  failed_when: false
+  tags: [always]
+
+- name: Select MongoDB build Python interpreter
+  ansible.builtin.set_fact:
+    mongodb_build_python: "{{ (mongodb_python_probe.results | selectattr('rc', 'eq', 0) | map(attribute='item') | list | first | default('')) }}"
+    mongodb_imp_shim_required: false
+  tags: [always]
+
+- name: Enable MongoDB imp shim fallback when legacy import fails
+  ansible.builtin.set_fact:
+    mongodb_build_python: "{{ (
+        mongodb_python_probe.results
+        | rejectattr('rc', 'equalto', 0)
+        | selectattr('stderr', 'defined')
+        | selectattr('stderr', 'search', 'No module named')
+        | map(attribute='item')
+        | list
+        | first
+        | default('')
+      ) }}"
+    mongodb_imp_shim_required: true
+  when:
+    - mongodb_build_python | length == 0
+    - (
+        mongodb_python_probe.results
+        | rejectattr('rc', 'equalto', 0)
+        | selectattr('stderr', 'defined')
+        | selectattr('stderr', 'search', 'No module named')
+        | list
+        | length
+      ) > 0
+  tags: [always]
+
+- name: Abort if no suitable Python interpreter was detected
+  ansible.builtin.fail:
+    msg: |-
+      Unable to locate a Python interpreter usable for the MongoDB build system.
+      Install python3.11 or python3.10 and optionally set databases_mongodb.build_python to the desired interpreter path.
+  when: mongodb_build_python | length == 0
+  tags: [always]
+
+- name: Resolve MongoDB builder primary group when not provided
+  ansible.builtin.command:
+    argv:
+      - id
+      - "-gn"
+      - "{{ mongodb_builder_user }}"
+  register: mongodb_builder_group_lookup
+  changed_when: false
+  failed_when: false
+  when: databases_mongodb.builder_group is not defined
+  tags: [always]
+
+- name: Set MongoDB builder group fact from lookup
+  ansible.builtin.set_fact:
+    mongodb_builder_group: "{{ mongodb_builder_group_lookup.stdout }}"
+  when:
+    - databases_mongodb.builder_group is not defined
+    - mongodb_builder_group_lookup.rc == 0
+    - mongodb_builder_group_lookup.stdout | length > 0
+  tags: [always]
+
+- name: Set MongoDB Python shim directory
+  ansible.builtin.set_fact:
+    mongodb_python_shim_dir: "{{ mongodb_build_dir }}/python_shims"
+  when: mongodb_imp_shim_required | default(false)
+  tags: [always]
+
+- name: Ensure MongoDB Python shim directory exists when required
+  ansible.builtin.file:
+    path: "{{ mongodb_python_shim_dir }}"
+    state: directory
+    owner: "{{ mongodb_builder_user }}"
+    group: "{{ mongodb_builder_group }}"
+    mode: '0755'
+  become: true
+  when: mongodb_imp_shim_required | default(false)
+  tags: [install, build, source]
+
+- name: Install compatibility shim for Python imp module
+  ansible.builtin.template:
+    src: mongodb-imp-shim.py.j2
+    dest: "{{ mongodb_python_shim_dir }}/imp.py"
+    owner: "{{ mongodb_builder_user }}"
+    group: "{{ mongodb_builder_group }}"
+    mode: '0644'
+  become: true
+  when: mongodb_imp_shim_required | default(false)
+  tags: [install, build, source]
+
+- name: Confirm MongoDB build uninstallation
+  ansible.builtin.pause:
+    prompt: |
+      ⚠️  WARNING: MongoDB Build Uninstallation Confirmation ⚠️
+
+      You are about to completely uninstall the MongoDB build from this system.
+
+      This will remove:
+      🗑️  Built binaries: {{ mongodb_install_bin_dir }}/mongod, {{ mongodb_install_bin_dir }}/mongos
+      🗑️  Systemd service: {{ mongodb_systemd_name }}.service
+      🗑️  Configuration files: {{ mongodb_config_dir }}/
+      🗑️  User account: {{ mongodb_user }}
+      🗑️  Build artifacts: {{ mongodb_build_dir }}
+      🗑️  UFW firewall rules: MongoDB profile
+
+      Are you sure you want to proceed with the uninstallation? (yes/no)
+  register: uninstall_confirmation
+  tags: [never, uninstall]
+
+- name: Aborted MongoDB build uninstallation
+  ansible.builtin.fail:
+    msg: |
+      🛑 Uninstallation aborted by user choice
+
+      The MongoDB build remains installed and operational.
+      No changes have been made to the system.
+  when: not (uninstall_confirmation.user_input | bool)
+  tags: [never, uninstall]
+
+## 01. INSTALL BUILD DEPENDENCIES
+# -----------------------------------------------------------------------------
+- name: Update package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  tags: [install, build, deps]
+
+- name: Install core build tools
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - cmake
+      - ninja-build
+      - python3
+      - python3-dev
+      - python3-pip
+      - git
+      - wget
+      - curl
+      - pkg-config
+    state: present
+  become: true
+  tags: [install, build, deps]
+
+- name: Install MongoDB build dependencies
+  ansible.builtin.apt:
+    name:
+      # SSL/TLS
+      - libssl-dev
+      - openssl
+      # Compression
+      - libzstd-dev
+      - libsnappy-dev
+      - zlib1g-dev
+      # Text processing
+      - libpcre2-dev
+      - libyaml-dev
+      - libstemmer-dev
+      # System libraries
+      - libbz2-dev
+      - liblzma-dev
+      - libreadline-dev
+      - libncurses-dev
+      - libffi-dev
+      # Development tools
+      - ccache
+      # ARM64 specific (may not be available on all systems)
+      - gcc-aarch64-linux-gnu
+      - g++-aarch64-linux-gnu
+    state: present
+  become: true
+  tags: [install, build, deps]
+
+- name: Install Python build dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ mongodb_build_python }}"
+      - "-m"
+      - "pip"
+      - "install"
+      - "--break-system-packages"
+      - "psutil"
+      - "cheetah3"
+      - "pyparsing"
+      - "typing-extensions"
+      - "scons>=4.9.1"
+  register: mongodb_pip_install
+  changed_when: "'Requirement already satisfied' not in mongodb_pip_install.stdout"
+  failed_when: mongodb_pip_install.rc != 0
+  become: true
+  tags: [install, build, deps]
+
+- name: Install additional dependencies for ARM64 builds
+  ansible.builtin.apt:
+    name:
+      - qemu-user-static
+      - binfmt-support
+    state: present
+  become: true
+  when: ansible_architecture == 'aarch64'
+  tags: [install, build, deps, arm64]
+
+## 02. DOWNLOAD AND EXTRACT MONGODB SOURCE
+# -----------------------------------------------------------------------------
+- name: Create build directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ mongodb_builder_user }}"
+    group: "{{ mongodb_builder_group }}"
+    mode: '0755'
+  loop:
+    - "{{ mongodb_source_dir }}"
+    - "{{ mongodb_build_dir }}"
+  become: true
+  tags: [install, build, source]
+
+- name: Ensure ccache directory exists for build user
+  ansible.builtin.file:
+    path: "/tmp/ccache"
+    state: directory
+    owner: "{{ mongodb_builder_user }}"
+    group: "{{ mongodb_builder_group }}"
+    mode: '0755'
+  become: true
+  when: mongodb_builder_user | length > 0
+  tags: [install, build, deps]
+
+- name: Clone MongoDB source code from GitHub
+  ansible.builtin.git:
+    repo: "https://github.com/mongodb/mongo.git"
+    dest: "{{ mongodb_source_dir }}"
+    version: "r{{ databases_mongodb.release }}"
+    depth: 1
+    clone: true
+    update: false
+    force: true
+  become: true
+  become_user: "{{ mongodb_builder_user }}"
+  tags: [install, build, source]
+
+- name: Verify source extraction
+  ansible.builtin.stat:
+    path: "{{ mongodb_source_dir }}/SConstruct"
+  register: mongodb_source_check
+  become: true
+  tags: [install, build, source]
+
+- name: Fail if MongoDB source extraction failed
+  ansible.builtin.fail:
+    msg: "MongoDB source extraction failed. SConstruct file not found in {{ mongodb_source_dir }}"
+  when: not mongodb_source_check.stat.exists
+  tags: [install, build, source]
+
+## 03. CONFIGURE AND BUILD MONGODB
+# -----------------------------------------------------------------------------
+- name: Configure MongoDB build for x86_64
+  ansible.builtin.command:
+    cmd: >
+      scons --prefix={{ mongodb_build_dir }}
+           --jobs={{ mongodb_build_cores }}
+           CC=gcc
+           CXX=g++
+           {{ mongodb_build_flags }}
+           mongod mongos
+    chdir: "{{ mongodb_source_dir }}"
+    creates: "{{ mongodb_build_dir }}/bin/mongod"
+  become: true
+  become_user: "{{ mongodb_builder_user }}"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+    CCACHE_DIR: "/tmp/ccache"
+    PYTHONPATH: "{{ mongodb_python_shim_dir if mongodb_imp_shim_required | default(false) else omit }}"
+  when: ansible_architecture == 'x86_64'
+  tags: [install, build, compile]
+
+- name: Configure MongoDB build for aarch64
+  ansible.builtin.command:
+    cmd: >
+      scons --prefix={{ mongodb_build_dir }}
+           --jobs={{ mongodb_build_cores }}
+           CC=gcc
+           CXX=g++
+           {{ mongodb_build_flags }}
+           --cxx-std=17
+           mongod mongos
+    chdir: "{{ mongodb_source_dir }}"
+    creates: "{{ mongodb_build_dir }}/bin/mongod"
+  become: true
+  become_user: "{{ mongodb_builder_user }}"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+    CCACHE_DIR: "/tmp/ccache"
+    CFLAGS: "-march=armv8-a -mtune=cortex-a72"
+    CXXFLAGS: "-march=armv8-a -mtune=cortex-a72"
+    PYTHONPATH: "{{ mongodb_python_shim_dir if mongodb_imp_shim_required | default(false) else omit }}"
+  when: ansible_architecture == 'aarch64'
+  tags: [install, build, compile]
+
+- name: Configure MongoDB build for other architectures
+  ansible.builtin.command:
+    cmd: >
+      scons --prefix={{ mongodb_build_dir }}
+           --jobs={{ mongodb_build_cores }}
+           CC=gcc
+           CXX=g++
+           {{ mongodb_build_flags }}
+           mongod mongos
+    chdir: "{{ mongodb_source_dir }}"
+    creates: "{{ mongodb_build_dir }}/bin/mongod"
+  become: true
+  become_user: "{{ mongodb_builder_user }}"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+    CCACHE_DIR: "/tmp/ccache"
+    PYTHONPATH: "{{ mongodb_python_shim_dir if mongodb_imp_shim_required | default(false) else omit }}"
+  when: ansible_architecture not in ['x86_64', 'aarch64']
+  tags: [install, build, compile]
+
+- name: Verify MongoDB build completed
+  ansible.builtin.stat:
+    path: "{{ mongodb_build_dir }}/bin/mongod"
+  register: mongodb_build_check
+  become: true
+  tags: [install, build, compile]
+
+- name: Fail if MongoDB build failed
+  ansible.builtin.fail:
+    msg: |
+      MongoDB build failed. Binary not found at {{ mongodb_build_dir }}/bin/mongod
+
+      Build log location: {{ mongodb_source_dir }}
+      Architecture: {{ ansible_architecture }}
+      Build cores: {{ mongodb_build_cores }}
+
+      Check the build logs for errors and ensure all dependencies are installed.
+  when: not mongodb_build_check.stat.exists
+  tags: [install, build, compile]
+
+## 04. INSTALL MONGODB BINARIES
+# -----------------------------------------------------------------------------
+- name: Ensure MongoDB install bin directory exists
+  ansible.builtin.file:
+    path: "{{ mongodb_install_bin_dir }}"
+    state: directory
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0755'
+  become: true
+  tags: [install, build, install]
+
+- name: Install MongoDB binaries to system
+  ansible.builtin.copy:
+    src: "{{ mongodb_build_dir }}/bin/{{ item }}"
+    dest: "{{ mongodb_install_bin_dir }}/{{ item }}"
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0755'
+    remote_src: true
+  become: true
+  loop:
+    - mongod
+    - mongos
+  tags: [install, build, install]
+
+- name: Verify MongoDB binaries are installed and executable
+  ansible.builtin.stat:
+    path: "{{ mongodb_install_bin_dir }}/mongod"
+  register: mongodb_binary_stat
+  become: true
+  tags: [install, build, install, verify]
+
+- name: Assert MongoDB binary is present, executable, and owned by correct user
+  ansible.builtin.assert:
+    that:
+      - mongodb_binary_stat.stat.exists
+      - mongodb_binary_stat.stat.executable
+      - mongodb_binary_stat.stat.pw_name == mongodb_user
+      - mongodb_binary_stat.stat.gr_name == mongodb_group
+    fail_msg: "MongoDB binary installation failed."
+    success_msg: "MongoDB binaries installed successfully."
+  become: true
+  tags: [install, build, install, verify]
+
+## 05. SETUP MONGODB USER & CREATE SERVICE DIRECTORIES
+# -----------------------------------------------------------------------------
+- name: Ensure MongoDB group exists
+  ansible.builtin.group:
+    name: "{{ mongodb_group }}"
+    state: present
+  become: true
+  tags: [install, config]
+
+- name: Create MongoDB system user
+  ansible.builtin.user:
+    name: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    comment: "MongoDB Server System Account"
+  become: true
+  tags: [install, config]
+
+- name: Delete MongoDB system user on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.user:
+    name: "{{ mongodb_user }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags: [never, uninstall]
+
+- name: Delete MongoDB system group on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.group:
+    name: "{{ mongodb_group }}"
+    state: absent
+    remove: true
+    force: true
+  become: true
+  failed_when: false
+  tags: [never, uninstall]
+
+- name: Create directories for MongoDB service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ mongodb_install_dir }}", mode: "u=rwx,g=rx,o=rx" }
+    - { path: "{{ mongodb_install_bin_dir }}", mode: "u=rwx,g=rx,o=rx" }
+    - { path: "{{ mongodb_config_dir }}", mode: "u=rwx,g=rw,o=" }
+    - { path: "{{ mongodb_data_dir }}",   mode: "u=rwx,g=r,o="  }
+    - { path: "{{ mongodb_log_dir }}",    mode: "u=rwx,g=rw,o=" }
+  become: true
+  tags: [install, config]
+
+- name: Remove MongoDB directories on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop:
+    - { path: "{{ mongodb_config_dir }}" }
+    - { path: "{{ mongodb_data_dir }}" }
+    - { path: "{{ mongodb_log_dir }}" }
+    - { path: "{{ mongodb_build_dir }}" }
+  become: true
+  tags: [never, uninstall]
+
+## 06. SETUP CONFIG FILE FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy MongoDB configuration file
+  ansible.builtin.template:
+    src: mongodb-build.conf.j2
+    dest: "{{ mongodb_config_file }}"
+    owner: "{{ mongodb_user }}"
+    group: "{{ mongodb_group }}"
+    mode: '0644'
+  become: true
+  tags: [install, config]
+
+- name: Check MongoDB binary exists before config validation
+  ansible.builtin.stat:
+    path: "{{ mongodb_binary_path }}"
+  register: mongodb_binary_check
+  become: true
+  tags: [install, config]
+
+- name: Fail if MongoDB binary is not installed
+  ansible.builtin.fail:
+    msg: |
+      MongoDB binary not found at {{ mongodb_binary_path }}.
+
+      The MongoDB binary must be installed before configuration validation can occur.
+      Please ensure the MongoDB build and installation tasks have been run successfully.
+
+      Expected path: {{ mongodb_binary_path }}
+      Config file: {{ mongodb_config_file }}
+  when: not mongodb_binary_check.stat.exists
+  tags: [install, config]
+
+## 07. SETUP SYSTEMD FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy systemd unit for MongoDB
+  ansible.builtin.template:
+    src: mongodb-build-systemd.service.j2
+    dest: "/lib/systemd/system/{{ mongodb_systemd_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags: [install, config]
+
+- name: Verify MongoDB systemd service config is valid
+  ansible.builtin.command: "systemd-analyze verify /lib/systemd/system/{{ mongodb_systemd_name }}.service"
+  register: mongodb_systemd_verify
+  changed_when: false
+  failed_when: mongodb_systemd_verify.rc != 0
+  tags: [install, config, verify]
+
+- name: Reload systemd and start MongoDB service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: "{{ mongodb_systemd_name }}"
+    enabled: true
+    state: started
+  become: true
+  tags: [install, config]
+
+- name: Verify MongoDB service is active
+  ansible.builtin.systemd:
+    name: "{{ mongodb_systemd_name }}"
+  register: mongodb_service_status
+  changed_when: false
+  tags: [install, config, verify, healthcheck]
+
+- name: Assert MongoDB service is running
+  ansible.builtin.assert:
+    that:
+      - mongodb_service_status.status.ActiveState == "active"
+    fail_msg: |
+      MongoDB service failed to start (ActiveState: {{ mongodb_service_status.status.ActiveState }}).
+
+      This may be due to build issues or architecture incompatibility.
+      The MongoDB binary was built for {{ ansible_architecture }} architecture.
+
+      Possible solutions:
+      1. Check build logs for compilation errors
+      2. Verify all build dependencies are installed
+      3. Ensure sufficient RAM for compilation (4GB+ recommended)
+      4. Check MongoDB {{ databases_mongodb.release }} compatibility with {{ ansible_architecture }}
+
+      Service status: {{ mongodb_service_status.status.ExecMainStatus }}
+      Exit code: {{ mongodb_service_status.status.ExecMainCode }}
+    success_msg: "MongoDB service is active."
+  ignore_errors: true
+  tags: [install, config, verify, healthcheck]
+
+## 08. SETUP FIREWALL FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Deploy MongoDB UFW application profile
+  ansible.builtin.template:
+    src: templates/mongodb-ufw-profile.j2
+    dest: "/etc/ufw/applications.d/{{ mongodb_systemd_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags: [install, config]
+
+- name: Reload UFW MongoDB application profiles
+  ansible.builtin.command: "ufw app update {{ mongodb_systemd_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags: [install, config]
+
+- name: Allow MongoDB through UFW using application profile
+  ansible.builtin.ufw:
+    rule: allow
+    name: "MongoDB"
+    comment: "Allow MongoDB ({{ databases_mongodb.port }}/tcp) from LOCAL NET"
+    src: "{{ item }}"
+  loop: "{{ networking_networks.local }}"
+  become: true
+  tags: [never, firewall]
+
+- name: Confirm MongoDB UFW profile is allowed for local networks
+  ansible.builtin.command: "ufw status numbered"
+  register: mongodb_ufw_status
+  changed_when: false
+  tags: [never, firewall]
+
+- name: Assert MongoDB UFW rule exists for each local network
+  ansible.builtin.assert:
+    that:
+      - "'MongoDB' in mongodb_ufw_status.stdout and item in mongodb_ufw_status.stdout"
+    fail_msg: "MongoDB UFW rule is NOT present for {{ item }}"
+    success_msg: "MongoDB UFW rule is present for {{ item }}"
+  loop: "{{ networking_networks.local }}"
+  tags: [never, firewall]
+
+- name: Remove UFW rules for MongoDB application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.ufw:
+    rule: deny
+    name: "MongoDB"
+    delete: true
+  become: true
+  failed_when: false
+  tags: [never, uninstall]
+
+- name: Remove MongoDB UFW application profile on uninstall
+  when: uninstall_confirmation | bool
+  ansible.builtin.file:
+    path: "/etc/ufw/applications.d/{{ mongodb_systemd_name }}"
+    state: absent
+  become: true
+  tags: [never, uninstall]
+
+## 09. CLEANUP BUILD ARTIFACTS
+# -----------------------------------------------------------------------------
+- name: Clean up MongoDB source and build directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ mongodb_source_dir }}"
+    - "{{ mongodb_build_dir }}"
+  become: true
+  tags: [install, build, cleanup]
+
+- name: Remove build dependencies (optional - saves disk space)
+  ansible.builtin.apt:
+    name:
+      - ccache
+      - cmake
+      - ninja-build
+      - gcc-aarch64-linux-gnu
+      - g++-aarch64-linux-gnu
+      - qemu-user-static
+      - binfmt-support
+    state: absent
+    purge: true
+    autoremove: true
+  become: true
+  tags: [never, cleanup]
+
+## 10. HEALTH CHECKS FOR MONGODB
+# -----------------------------------------------------------------------------
+- name: Wait for MongoDB to be available
+  ansible.builtin.wait_for:
+    host: "{{ databases_mongodb.listen_address }}"
+    port: "{{ databases_mongodb.port }}"
+    timeout: 60
+  when: mongodb_service_status.status.ActiveState == "active"
+  tags: [install, config, verify, healthcheck]
+
+- name: Check MongoDB process is running
+  ansible.builtin.shell: "pgrep mongod"
+  register: mongod_process_check
+  changed_when: false
+  failed_when: mongod_process_check.rc != 0
+  when: mongodb_service_status.status.ActiveState == "active"
+  tags: [install, config, verify, healthcheck]
+
+- name: Check if MongoDB legacy shell binary exists
+  ansible.builtin.stat:
+    path: "{{ mongodb_install_bin_dir }}/mongo"
+  register: mongodb_legacy_shell
+  become: true
+  tags: [install, config, verify, healthcheck]
+
+- name: Check MongoDB responds to ping
+  ansible.builtin.command: "{{ mongodb_install_bin_dir }}/mongo --eval 'db.runCommand({ ping: 1 })' --quiet"
+  register: mongodb_ping_check
+  changed_when: false
+  failed_when: "'ok' not in mongodb_ping_check.stdout"
+  when:
+    - mongodb_service_status.status.ActiveState == "active"
+    - mongodb_legacy_shell.stat.exists
+  tags: [install, config, verify, healthcheck]
+
+- name: Check MongoDB version
+  ansible.builtin.command: "{{ mongodb_binary_path }} --version"
+  register: mongodb_version_check
+  changed_when: false
+  become: true
+  tags: [install, config, verify, healthcheck]
+
+- name: Record MongoDB version fact for reuse
+  ansible.builtin.set_fact:
+    mongodb_installed_version: "{{ mongodb_version_check.stdout_lines[0] | default('unknown') }}"
+  tags: [install, config, verify, healthcheck]
+
+- name: Show MongoDB version and build info
+  ansible.builtin.debug:
+    msg:
+      - "MongoDB Version: {{ mongodb_version_check.stdout_lines[0] | default('Unknown') }}"
+      - "MongoDB Version Fact: {{ mongodb_installed_version }}"
+      - "Build Architecture: {{ ansible_architecture }}"
+      - "Build Cores Used: {{ mongodb_build_cores }}"
+      - "Service Status: {{ mongodb_service_status.status.ActiveState }}"
+  tags: [install, config, verify, healthcheck]
